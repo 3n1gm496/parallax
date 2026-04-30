@@ -1,0 +1,16 @@
+.env
+.env.*
+secrets/
+*.key
+*.pem
+*.p12
+*.sqlite
+*.db
+node_modules/
+.venv/
+__pycache__/
+dist/
+build/
+coverage/
+.DS_Store
+.worktrees/
