@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from parallax.config import settings
@@ -8,3 +9,16 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def get_session() -> Session:
     return SessionLocal()
+
+
+@contextmanager
+def session_scope():
+    """Yield a session; roll back on exception, close always."""
+    session = SessionLocal()
+    try:
+        yield session
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
