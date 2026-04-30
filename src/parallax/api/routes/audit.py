@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from parallax.api.deps import get_session
 from parallax.audit.repository import AuditRepository
@@ -10,7 +10,7 @@ router = APIRouter(tags=["audit"])
 
 @router.get("/audit", response_model=list[AuditEventResponse])
 def list_audit_events(
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=1000),
     session: Session = Depends(get_session),
 ) -> list[AuditEventResponse]:
     repo = AuditRepository(session)

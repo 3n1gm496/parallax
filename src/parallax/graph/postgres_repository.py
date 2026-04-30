@@ -1,6 +1,6 @@
 from __future__ import annotations
 import uuid
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from parallax.db.models import MarketRelation
 from parallax.graph.repository import GraphRepository
@@ -56,10 +56,18 @@ class PostgresGraphRepository(GraphRepository):
     ) -> bool:
         return (
             self._session.query(MarketRelation)
-            .filter_by(
-                from_market_id=from_market_id,
-                to_market_id=to_market_id,
-                relation_type=relation_type.value,
+            .filter(
+                or_(
+                    and_(
+                        MarketRelation.from_market_id == from_market_id,
+                        MarketRelation.to_market_id == to_market_id,
+                    ),
+                    and_(
+                        MarketRelation.from_market_id == to_market_id,
+                        MarketRelation.to_market_id == from_market_id,
+                    ),
+                ),
+                MarketRelation.relation_type == relation_type.value,
             )
             .first()
         ) is not None

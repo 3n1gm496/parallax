@@ -60,15 +60,24 @@ class TestPostgresGraphRepository:
     def test_relation_exists_returns_true_when_found(self):
         session = MagicMock()
         rel = _make_relation()
-        session.query.return_value.filter_by.return_value.first.return_value = rel
+        session.query.return_value.filter.return_value.first.return_value = rel
         repo = PostgresGraphRepository(session)
         assert repo.relation_exists("polymarket:a", "kalshi:b", RelationType.EQUIVALENT) is True
 
     def test_relation_exists_returns_false_when_not_found(self):
         session = MagicMock()
-        session.query.return_value.filter_by.return_value.first.return_value = None
+        session.query.return_value.filter.return_value.first.return_value = None
         repo = PostgresGraphRepository(session)
         assert repo.relation_exists("polymarket:a", "kalshi:b", RelationType.EQUIVALENT) is False
+
+    def test_relation_exists_checks_reverse_direction(self):
+        """relation_exists must find (b→a) even when queried as (a→b)."""
+        session = MagicMock()
+        rel = _make_relation(from_market_id="kalshi:b", to_market_id="polymarket:a")
+        session.query.return_value.filter.return_value.first.return_value = rel
+        repo = PostgresGraphRepository(session)
+        # Query with original direction — should still find the reversed record
+        assert repo.relation_exists("polymarket:a", "kalshi:b", RelationType.EQUIVALENT) is True
 
     def test_delete_relation_returns_true_when_found(self):
         session = MagicMock()

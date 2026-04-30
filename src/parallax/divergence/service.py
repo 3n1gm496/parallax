@@ -73,27 +73,34 @@ class DivergenceService:
     def _check_mutually_exclusive(
         self, a: RawMarket, b: RawMarket
     ) -> PayoffMatrix | None:
-        """Sell YES on both legs. Profit if sum of YES prices > 1 + friction."""
-        p_a = a.outcome_prices[0]  # YES price for market A
-        p_b = b.outcome_prices[0]  # YES price for market B
-        proceeds = p_a + p_b
-        total_cost = 1.0  # one leg always pays out 1.0
+        """Sell YES on both legs. Profit if sum of YES prices > 1.0 + friction.
+
+        Payoff is identical regardless of which leg resolves YES: one always
+        pays out 1.0 while the other expires worthless.  worst_case_payoff is
+        already post-friction; SimulatorService must NOT re-apply friction.
+        """
+        if not a.outcome_prices or not b.outcome_prices:
+            return None
+        p_a = a.outcome_prices[0]
+        p_b = b.outcome_prices[0]
+        total_cost = 1.0  # collateral required: one leg always pays out 1.0
+        gross = p_a + p_b - total_cost
         friction = self._friction_cost(total_cost)
-        net = proceeds - total_cost - friction
+        net = gross - friction
 
         if net <= 0:
             return None
 
         legs = [
-            Leg(market_id=a.id, side="NO", price=1 - p_a, platform=a.platform),
-            Leg(market_id=b.id, side="NO", price=1 - p_b, platform=b.platform),
+            Leg(market_id=a.id, side="NO", price=1.0 - p_a, platform=a.platform),
+            Leg(market_id=b.id, side="NO", price=1.0 - p_b, platform=b.platform),
         ]
         return PayoffMatrix(
             legs=legs,
             total_cost=total_cost,
             scenarios=[
-                Scenario(name="A resolves YES", description="A wins, B loses", payoff=net, is_breaking=False),
-                Scenario(name="B resolves YES", description="B wins, A loses", payoff=net, is_breaking=False),
+                Scenario(name="A resolves YES", description="A pays out, B expires worthless", payoff=net, is_breaking=False),
+                Scenario(name="B resolves YES", description="B pays out, A expires worthless", payoff=net, is_breaking=False),
             ],
             worst_case_payoff=net,
             best_case_payoff=net,
@@ -105,7 +112,16 @@ class DivergenceService:
     def _check_equivalent(
         self, a: RawMarket, b: RawMarket
     ) -> PayoffMatrix | None:
-        """Buy cheaper YES, sell more expensive YES (cross-platform spread)."""
+        """Buy YES on cheaper platform, buy NO (sell YES) on more expensive.
+
+        For truly EQUIVALENT markets both legs resolve the same way, so the
+        spread (sell_price - buy_price) is realised regardless of outcome.
+        total_cost = buy_price + (1 - sell_price); payoff is direction-neutral.
+        worst_case_payoff is already post-friction; SimulatorService must NOT
+        re-apply friction.
+        """
+        if not a.outcome_prices or not b.outcome_prices:
+            return None
         p_a = a.outcome_prices[0]
         p_b = b.outcome_prices[0]
         if abs(p_a - p_b) < 0.01:
@@ -118,23 +134,25 @@ class DivergenceService:
             buyer, seller = b, a
             buy_price, sell_price = p_b, p_a
 
-        total_cost = buy_price
+        # Capital deployed: cost of YES leg + cost of NO leg
+        total_cost = buy_price + (1.0 - sell_price)
+        gross = sell_price - buy_price  # same payoff regardless of YES/NO outcome
         friction = self._friction_cost(total_cost)
-        net = sell_price - buy_price - friction
+        net = gross - friction
 
         if net <= 0:
             return None
 
         legs = [
             Leg(market_id=buyer.id, side="YES", price=buy_price, platform=buyer.platform),
-            Leg(market_id=seller.id, side="NO", price=1 - sell_price, platform=seller.platform),
+            Leg(market_id=seller.id, side="NO", price=1.0 - sell_price, platform=seller.platform),
         ]
         return PayoffMatrix(
             legs=legs,
             total_cost=total_cost,
             scenarios=[
-                Scenario(name="Event resolves YES", description="Buy leg wins, sell leg loses net", payoff=net, is_breaking=False),
-                Scenario(name="Event resolves NO", description="Both legs net", payoff=-buy_price + (1 - sell_price) - friction, is_breaking=True),
+                Scenario(name="Event resolves YES", description="YES leg wins, NO leg expires worthless", payoff=net, is_breaking=False),
+                Scenario(name="Event resolves NO", description="NO leg wins, YES leg expires worthless", payoff=net, is_breaking=False),
             ],
             worst_case_payoff=net,
             best_case_payoff=net,

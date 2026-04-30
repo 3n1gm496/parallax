@@ -71,7 +71,7 @@ class PolymarketAdapter(PlatformAdapter):
                 outcomes=outcomes,
                 outcome_prices=outcome_prices,
                 category=raw.get("category"),
-                group_id=raw.get("groupItemTitle") or raw.get("eventId"),
+                group_id=raw.get("eventId"),
                 deadline=deadline,
                 is_closed=bool(raw.get("closed", False)),
                 resolution_source=raw.get("resolutionSource"),

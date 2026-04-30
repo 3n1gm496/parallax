@@ -72,13 +72,24 @@ class TestSimulatorService:
         assert result.note == "stub — no order book model"
         assert result.candidate_id == str(c.id)
 
-    def test_simulate_executable_when_positive_pnl(self):
+    def test_simulate_uses_worst_case_payoff_directly(self):
+        """SimulatorService must not re-apply friction — worst_case_payoff is already post-friction."""
         session = MagicMock()
         c = _candidate(0.05)
         session.get.return_value = c
         svc = SimulatorService(session)
         result = svc.simulate(str(c.id))
+        # simulated_pnl must equal worst_case_payoff exactly, no friction subtraction
+        assert result.simulated_pnl == 0.05
         assert result.is_executable is True
+
+    def test_simulate_not_executable_when_payoff_zero(self):
+        session = MagicMock()
+        c = _candidate(0.0)
+        session.get.return_value = c
+        svc = SimulatorService(session)
+        result = svc.simulate(str(c.id))
+        assert result.is_executable is False
 
 
 class TestAutopsyService:

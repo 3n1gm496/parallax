@@ -20,8 +20,8 @@ class SimulatorService:
             raise ValueError(f"Candidate {candidate_id} not found")
 
         matrix = PayoffMatrix.model_validate(candidate.payoff_matrix)
-        friction_cost = matrix.total_cost * matrix.friction_bps / 10_000
-        simulated_pnl = matrix.worst_case_payoff - friction_cost
+        # worst_case_payoff is already post-friction (applied once in DivergenceService)
+        simulated_pnl = matrix.worst_case_payoff
 
         return SimulationResult(
             candidate_id=candidate_id,
