@@ -1,7 +1,11 @@
 from __future__ import annotations
 from datetime import datetime
 from enum import Enum
-from pydantic import BaseModel
+from typing import Annotated, Literal
+from pydantic import BaseModel, Field
+
+Probability = Annotated[float, Field(ge=0.0, le=1.0)]
+NonNegativeBps = Annotated[int, Field(ge=0)]
 
 
 class RelationType(str, Enum):
@@ -65,8 +69,8 @@ class AmbiguityFlag(BaseModel):
 
 class Counterexample(BaseModel):
     scenario_description: str
-    resolution_a: str   # "YES" | "NO" | "AMBIGUOUS"
-    resolution_b: str
+    resolution_a: Literal["YES", "NO", "AMBIGUOUS"]
+    resolution_b: Literal["YES", "NO", "AMBIGUOUS"]
     why_different: str
 
 
@@ -76,15 +80,15 @@ class ContractSchema(BaseModel):
     exclusions: list[str]
     ambiguity_terms: list[AmbiguityFlag]
     counterexamples: list[Counterexample]
-    compiler_confidence: float   # 0.0–1.0; calibrated over time
+    compiler_confidence: Probability   # 0.0–1.0; calibrated over time
 
 
 class Leg(BaseModel):
     market_id: str
-    side: str = "YES"            # "YES" | "NO"
-    price: float
+    side: Literal["YES", "NO"] = "YES"
+    price: Probability
     quantity: float = 1.0
-    cost: float | None = None    # defaults to price * quantity; set explicitly when known
+    cost: float | None = None    # must be set explicitly when known; not auto-computed
     outcome: str | None = None   # human-readable outcome label, e.g. "Biden wins"
     platform: str | None = None
 
@@ -104,14 +108,14 @@ class PayoffMatrix(BaseModel):
     best_case_payoff: float
     breaking_scenario: Scenario | None  # must exist for any approved candidate
     opportunity_type: OpportunityType
-    friction_bps: int
+    friction_bps: NonNegativeBps
 
 
 class RiskScore(BaseModel):
-    oracle_risk: float
-    deadline_risk: float
-    semantic_risk: float
-    composite: float
+    oracle_risk: Probability
+    deadline_risk: Probability
+    semantic_risk: Probability
+    composite: Probability
 
     @classmethod
     def combine(cls, oracle: float, deadline: float, semantic: float) -> "RiskScore":
@@ -126,8 +130,8 @@ class RiskScore(BaseModel):
 class SimulationResult(BaseModel):
     candidate_id: str
     simulated_pnl: float       # post-friction estimate
-    friction_bps: int
-    fill_probability: float    # 1.0 in stub (assumes full fill)
+    friction_bps: NonNegativeBps
+    fill_probability: Probability    # 1.0 in stub (assumes full fill)
     is_executable: bool        # True if simulated_pnl > 0
     note: str                  # "stub — no order book model" in Slice 1
 
@@ -143,21 +147,23 @@ class ResolutionType(str, Enum):
 
 class CandidateSummary(BaseModel):
     id: str
-    opportunity_type: str
+    opportunity_type: OpportunityType
     worst_case_payoff: float
     total_cost: float
-    court_decision: str
+    court_decision: CourtDecision
     created_at: datetime
+
 
 class CandidateDetail(BaseModel):
     id: str
-    opportunity_type: str
+    opportunity_type: OpportunityType
     market_ids: list[str]
     payoff_matrix: PayoffMatrix
     risk_score: RiskScore | None
     simulation_result: SimulationResult | None
-    court_decision: str
+    court_decision: CourtDecision
     created_at: datetime
+
 
 class MarketSummary(BaseModel):
     id: str
@@ -174,12 +180,14 @@ class MarketDetail(MarketSummary):
     resolution_source: str | None
     contract: ContractSchema | None
 
+
 class AuditEventResponse(BaseModel):
     id: str
     event_type: str
     entity_id: str | None
     payload: dict
     created_at: datetime
+
 
 class RunSummary(BaseModel):
     markets_ingested: int
