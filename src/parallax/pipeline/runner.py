@@ -14,6 +14,7 @@ from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.ingestion.market_repository import MarketRepository
+from parallax.detection.stage2 import Stage2LLMDetector
 from parallax.prover.service import ProverService
 from parallax.shared.schemas import RunSummary
 from parallax.simulator.service import SimulatorService
@@ -61,8 +62,10 @@ class PipelineRunner:
                     {"compiled": contracts_compiled},
                 )
 
-                prover = ProverService(session, graph_repo)
-                relations_detected = prover.run(open_markets)
+                import anthropic as anthropic_sdk
+                stage2 = Stage2LLMDetector(anthropic_sdk.AsyncAnthropic(api_key=settings.anthropic_api_key))
+                prover = ProverService(session, graph_repo, stage2_classifier=stage2)
+                relations_detected = await prover.run(open_markets)
                 audit_svc.record("pipeline.prover.complete", "pipeline", "global", {"relations": relations_detected})
 
                 divergence_svc = DivergenceService(session, graph_repo, friction_bps=settings.friction_bps)

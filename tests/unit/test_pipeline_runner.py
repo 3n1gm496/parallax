@@ -27,10 +27,11 @@ class TestPipelineRunner:
              patch("parallax.pipeline.runner.CourtService"), \
              patch("parallax.pipeline.runner.SimulatorService"), \
              patch("parallax.pipeline.runner.CompilerService") as MockCompiler, \
-             patch("parallax.pipeline.runner.AnthropicCompilerProvider"):
+             patch("parallax.pipeline.runner.AnthropicCompilerProvider"), \
+             patch("parallax.pipeline.runner.Stage2LLMDetector"):
 
             MockMarket.return_value.list_open.return_value = []
-            MockProver.return_value.run.return_value = 3
+            MockProver.return_value.run = AsyncMock(return_value=3)
             MockDivergence.return_value.scan.return_value = 2
             MockCandidates.return_value.list_open.return_value = []
             MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
@@ -56,10 +57,11 @@ class TestPipelineRunner:
              patch("parallax.pipeline.runner.CourtService"), \
              patch("parallax.pipeline.runner.SimulatorService"), \
              patch("parallax.pipeline.runner.CompilerService") as MockCompiler, \
-             patch("parallax.pipeline.runner.AnthropicCompilerProvider"):
+             patch("parallax.pipeline.runner.AnthropicCompilerProvider"), \
+             patch("parallax.pipeline.runner.Stage2LLMDetector"):
 
             MockMarket.return_value.list_open.return_value = []
-            MockProver.return_value.run.side_effect = RuntimeError("boom")
+            MockProver.return_value.run = AsyncMock(side_effect=RuntimeError("boom"))
             MockDivergence.return_value.scan.return_value = 0
             MockCandidates.return_value.list_open.return_value = []
             MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
