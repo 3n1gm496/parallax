@@ -14,3 +14,6 @@ build/
 coverage/
 .DS_Store
 .worktrees/
+.serena/
+*.swp
+*.swo
