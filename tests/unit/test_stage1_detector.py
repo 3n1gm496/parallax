@@ -80,3 +80,64 @@ class TestStage1ConstraintDetector:
         ]
         specs = self.detector.detect(markets)
         assert len(specs) == 0
+
+
+def _market_cross(
+    mid: str, platform: str, yes_price: float, deadline: datetime | None = None
+) -> RawMarket:
+    if deadline is None:
+        deadline = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    return RawMarket(
+        id=mid, platform=platform,
+        market_id=mid.split(":")[-1],
+        title=f"Title {mid}", description="",
+        resolution_criteria="",
+        outcomes=["Yes", "No"],
+        outcome_prices=[yes_price, 1 - yes_price],
+        group_id=None,
+        deadline=deadline,
+        is_closed=False, raw_payload={},
+    )
+
+
+def test_cross_platform_price_inversion_emits_equivalent_candidate():
+    detector = Stage1ConstraintDetector()
+    deadline = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    # YES prices sum to 0.85 < 0.97: both markets are bearish on same event
+    a = _market_cross("pm:a", "polymarket", 0.40, deadline)
+    b = _market_cross("kalshi:b", "kalshi", 0.45, deadline)
+    specs = detector.detect([a, b])
+    equiv = [s for s in specs if s.relation_type == RelationType.EQUIVALENT]
+    assert len(equiv) == 1
+    assert equiv[0].evidence["rule"] == "cross_platform_price_inversion"
+
+
+def test_cross_platform_no_candidate_when_deadlines_far_apart():
+    detector = Stage1ConstraintDetector()
+    a = _market_cross("pm:a", "polymarket", 0.40,
+                      datetime(2025, 12, 31, tzinfo=timezone.utc))
+    b = _market_cross("kalshi:b", "kalshi", 0.45,
+                      datetime(2025, 11, 1, tzinfo=timezone.utc))
+    specs = detector.detect([a, b])
+    equiv = [s for s in specs if s.relation_type == RelationType.EQUIVALENT]
+    assert len(equiv) == 0
+
+
+def test_cross_platform_no_candidate_when_same_platform():
+    detector = Stage1ConstraintDetector()
+    deadline = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    a = _market_cross("pm:a", "polymarket", 0.40, deadline)
+    b = _market_cross("pm:b", "polymarket", 0.45, deadline)
+    specs = detector.detect([a, b])
+    equiv = [s for s in specs if s.relation_type == RelationType.EQUIVALENT]
+    assert len(equiv) == 0
+
+
+def test_cross_platform_no_candidate_when_sum_too_high():
+    detector = Stage1ConstraintDetector()
+    deadline = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    a = _market_cross("pm:a", "polymarket", 0.50, deadline)
+    b = _market_cross("kalshi:b", "kalshi", 0.50, deadline)
+    specs = detector.detect([a, b])
+    equiv = [s for s in specs if s.relation_type == RelationType.EQUIVALENT]
+    assert len(equiv) == 0

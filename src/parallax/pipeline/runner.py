@@ -6,12 +6,18 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from parallax.audit.service import AuditService
+from parallax.compiler.anthropic_provider import AnthropicCompilerProvider
+from parallax.compiler.service import CompilerService
 from parallax.config import settings
 from parallax.court.service import CourtService
 from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
 from parallax.graph.postgres_repository import PostgresGraphRepository
+from parallax.ingestion.ingestor import IngestorService
+from parallax.ingestion.kalshi_adapter import KalshiAdapter
 from parallax.ingestion.market_repository import MarketRepository
+from parallax.ingestion.polymarket_adapter import PolymarketAdapter
+from parallax.detection.stage2 import Stage2LLMDetector
 from parallax.prover.service import ProverService
 from parallax.shared.schemas import RunSummary
 from parallax.simulator.service import SimulatorService
@@ -22,18 +28,31 @@ SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
 class PipelineRunner:
-    """Orchestrate a single pipeline run: prove → diverge → court → simulate."""
+    """Orchestrate a single pipeline run: compile → prove → diverge → court → simulate."""
 
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
-    def run_once(self) -> RunSummary:
+    async def run_once(self) -> RunSummary:
         errors: list[str] = []
+        markets_ingested = 0
+        contracts_compiled = 0
         relations_detected = 0
         candidates_found = 0
         candidates_watchlisted = 0
 
         try:
+            adapters = [PolymarketAdapter(max_events=settings.polymarket_max_events_per_poll)]
+            if settings.kalshi_api_key:
+                adapters.append(KalshiAdapter(api_key=settings.kalshi_api_key))
+            ingestor = IngestorService(adapters, self._session_factory)
+            try:
+                counts = await ingestor.run_once()
+                markets_ingested = sum(counts.values())
+            except Exception as exc:
+                log.warning("pipeline: ingestion failed: %s", exc)
+                errors.append(f"ingestion:{exc}")
+
             with self._session_factory() as session:
                 market_repo = MarketRepository(session)
                 graph_repo = PostgresGraphRepository(session)
@@ -42,8 +61,26 @@ class PipelineRunner:
                 open_markets = market_repo.list_open()
                 log.info("pipeline: %d open markets loaded", len(open_markets))
 
-                prover = ProverService(session, graph_repo)
-                relations_detected = prover.run(open_markets)
+                provider = AnthropicCompilerProvider()
+                compiler_svc = CompilerService(session, provider)
+                for market in open_markets:
+                    try:
+                        await compiler_svc.compile(market)
+                        contracts_compiled += 1
+                    except Exception as exc:
+                        log.warning("pipeline: compile failed for %s: %s", market.id, exc)
+                        errors.append(f"compile:{market.id}:{exc}")
+                audit_svc.record(
+                    "pipeline.compiler.complete",
+                    "pipeline",
+                    "global",
+                    {"compiled": contracts_compiled},
+                )
+
+                import anthropic as anthropic_sdk
+                stage2 = Stage2LLMDetector(anthropic_sdk.AsyncAnthropic(api_key=settings.anthropic_api_key))
+                prover = ProverService(session, graph_repo, stage2_classifier=stage2)
+                relations_detected = await prover.run(open_markets)
                 audit_svc.record("pipeline.prover.complete", "pipeline", "global", {"relations": relations_detected})
 
                 divergence_svc = DivergenceService(session, graph_repo, friction_bps=settings.friction_bps)
@@ -72,8 +109,8 @@ class PipelineRunner:
             errors.append(str(exc))
 
         return RunSummary(
-            markets_ingested=0,
-            contracts_compiled=0,
+            markets_ingested=markets_ingested,
+            contracts_compiled=contracts_compiled,
             events_resolved=0,
             relations_detected=relations_detected,
             candidates_found=candidates_found,
@@ -83,9 +120,10 @@ class PipelineRunner:
 
 
 if __name__ == "__main__":
+    import asyncio
     import logging
     logging.basicConfig(level=logging.INFO)
     from parallax.db.session import session_scope
     runner = PipelineRunner(session_scope)
-    summary = runner.run_once()
+    summary = asyncio.run(runner.run_once())
     print(summary)
