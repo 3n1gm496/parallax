@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 import uuid
 from parallax.audit.repository import AuditRepository
 from parallax.audit.service import AuditService

@@ -48,11 +48,13 @@ class MarketRepository:
     def get(self, market_id: str) -> RawMarket | None:
         return self._session.get(RawMarket, market_id)
 
-    def list_open(self, platform: str | None = None) -> list[RawMarket]:
+    def list_open(
+        self, platform: str | None = None, limit: int = 1000, offset: int = 0
+    ) -> list[RawMarket]:
         q = self._session.query(RawMarket).filter_by(is_closed=False)
         if platform:
             q = q.filter_by(platform=platform)
-        return q.all()
+        return q.offset(offset).limit(limit).all()
 
     def list_by_group(self, group_id: str) -> list[RawMarket]:
         return (

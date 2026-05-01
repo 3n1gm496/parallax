@@ -6,6 +6,7 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from parallax.audit.service import AuditService
+from parallax.config import settings
 from parallax.court.service import CourtService
 from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
@@ -45,7 +46,7 @@ class PipelineRunner:
                 relations_detected = prover.run(open_markets)
                 audit_svc.record("pipeline.prover.complete", "pipeline", "global", {"relations": relations_detected})
 
-                divergence_svc = DivergenceService(session, graph_repo)
+                divergence_svc = DivergenceService(session, graph_repo, friction_bps=settings.friction_bps)
                 candidates_found = divergence_svc.scan(open_markets)
                 audit_svc.record("pipeline.divergence.complete", "pipeline", "global", {"candidates": candidates_found})
 
@@ -79,3 +80,12 @@ class PipelineRunner:
             candidates_watchlisted=candidates_watchlisted,
             errors=errors,
         )
+
+
+if __name__ == "__main__":
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    from parallax.db.session import session_scope
+    runner = PipelineRunner(session_scope)
+    summary = runner.run_once()
+    print(summary)

@@ -44,17 +44,23 @@ class TestAnthropicCompilerProvider:
         provider = AnthropicCompilerProvider(api_key="test")
         assert provider.version.startswith("anthropic-")
 
+    def _mock_tool_response(self, contract: ContractSchema) -> MagicMock:
+        tool_block = MagicMock()
+        tool_block.type = "tool_use"
+        tool_block.input = contract.model_dump()
+        response = MagicMock()
+        response.content = [tool_block]
+        return response
+
     @pytest.mark.anyio
     async def test_compile_returns_contract_schema(self):
         contract = _sample_contract()
-        mock_response = MagicMock()
-        mock_response.parsed_output = contract
 
         with patch(
             "parallax.compiler.anthropic_provider.anthropic.AsyncAnthropic"
         ) as MockClient:
             mock_client = MockClient.return_value
-            mock_client.messages.parse = AsyncMock(return_value=mock_response)
+            mock_client.messages.create = AsyncMock(return_value=self._mock_tool_response(contract))
 
             provider = AnthropicCompilerProvider(api_key="test")
             result = await provider.compile(_sample_market())
@@ -65,38 +71,37 @@ class TestAnthropicCompilerProvider:
 
     @pytest.mark.anyio
     async def test_compile_passes_market_content(self):
-        mock_response = MagicMock()
-        mock_response.parsed_output = _sample_contract()
-
         with patch(
             "parallax.compiler.anthropic_provider.anthropic.AsyncAnthropic"
         ) as MockClient:
             mock_client = MockClient.return_value
-            mock_client.messages.parse = AsyncMock(return_value=mock_response)
+            mock_client.messages.create = AsyncMock(
+                return_value=self._mock_tool_response(_sample_contract())
+            )
 
             provider = AnthropicCompilerProvider(api_key="test")
             await provider.compile(_sample_market())
 
-        call_kwargs = mock_client.messages.parse.call_args.kwargs
+        call_kwargs = mock_client.messages.create.call_args.kwargs
         assert call_kwargs["model"] == "claude-sonnet-4-6"
         user_msg = call_kwargs["messages"][0]["content"]
         assert "Will X happen before Dec 31?" in user_msg
         assert "Resolves YES if X" in user_msg
+        assert call_kwargs["tool_choice"] == {"type": "tool", "name": "compile_contract"}
 
     @pytest.mark.anyio
     async def test_compile_uses_cached_system_prompt(self):
-        mock_response = MagicMock()
-        mock_response.parsed_output = _sample_contract()
-
         with patch(
             "parallax.compiler.anthropic_provider.anthropic.AsyncAnthropic"
         ) as MockClient:
             mock_client = MockClient.return_value
-            mock_client.messages.parse = AsyncMock(return_value=mock_response)
+            mock_client.messages.create = AsyncMock(
+                return_value=self._mock_tool_response(_sample_contract())
+            )
 
             provider = AnthropicCompilerProvider(api_key="test")
             await provider.compile(_sample_market())
 
-        system = mock_client.messages.parse.call_args.kwargs["system"]
+        system = mock_client.messages.create.call_args.kwargs["system"]
         assert isinstance(system, list)
         assert system[0]["cache_control"] == {"type": "ephemeral"}

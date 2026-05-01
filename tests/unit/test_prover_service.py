@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 from parallax.db.models import RawMarket
 from parallax.prover.service import ProverService
 from parallax.shared.schemas import RelationType

@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio
 import logging
-from sqlalchemy.orm import Session
 from parallax.ingestion.adapter import PlatformAdapter
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.audit.service import AuditService

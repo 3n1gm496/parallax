@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from datetime import datetime, timezone
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.db.models import RawMarket

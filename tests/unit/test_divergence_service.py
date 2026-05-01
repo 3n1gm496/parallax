@@ -55,11 +55,12 @@ def _rel(a_id: str, b_id: str, rtype: RelationType) -> dict:
 class TestDivergenceService:
     def _make_service(self, relations: list[dict], friction_bps: int = 10):
         session = MagicMock()
-        session.add = MagicMock()
-        session.flush = MagicMock()
         graph_repo = MagicMock()
         graph_repo.get_relations.return_value = relations
         svc = DivergenceService(session, graph_repo, friction_bps=friction_bps)
+        svc._candidate_repo = MagicMock()
+        svc._candidate_repo.candidate_exists.return_value = False
+        svc._candidate_repo.create.return_value = MagicMock()
         return svc, session
 
     def test_no_markets_finds_nothing(self):
@@ -70,37 +71,35 @@ class TestDivergenceService:
         a = _market("pm:a", "pm", 0.60)
         b = _market("pm:b", "pm", 0.55)
         rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
-        svc, session = self._make_service([rel])
+        svc, _ = self._make_service([rel])
         count = svc.scan([a, b])
         assert count == 1
-        session.add.assert_called_once()
+        svc._candidate_repo.create.assert_called_once()
 
     def test_mutually_exclusive_fairly_priced_no_candidate(self):
         a = _market("pm:a", "pm", 0.50)
         b = _market("pm:b", "pm", 0.50)
         rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
-        svc, session = self._make_service([rel])
+        svc, _ = self._make_service([rel])
         count = svc.scan([a, b])
         assert count == 0
-        session.add.assert_not_called()
+        svc._candidate_repo.create.assert_not_called()
 
     def test_mutually_exclusive_payoff_math_no_double_friction(self):
         """worst_case_payoff = gross - friction once; SimulatorService must not re-apply."""
         a = _market("pm:a", "pm", 0.60)
         b = _market("pm:b", "pm", 0.55)
         rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
-        svc, session = self._make_service([rel], friction_bps=10)
-        # Capture the PayoffMatrix passed to CandidateRepository.create
+        svc, _ = self._make_service([rel], friction_bps=10)
         captured = {}
-        def _capture_create(**kwargs):
-            captured.update(kwargs)
-            return MagicMock()
         svc._candidate_repo.create = MagicMock(side_effect=lambda **kw: captured.update(kw) or MagicMock())
         svc.scan([a, b])
         matrix = captured["payoff_matrix"]
-        # gross = 0.60 + 0.55 - 1.0 = 0.15; friction = 1.0 * 10/10000 = 0.001; net = 0.149
-        assert abs(matrix.worst_case_payoff - 0.149) < 1e-9
-        assert matrix.total_cost == 1.0
+        # total_cost = (1-0.60) + (1-0.55) = 0.85 (capital deployed: both NO legs)
+        # gross = 0.60 + 0.55 - 1.0 = 0.15
+        # friction = 0.85 * 10/10000 = 0.00085; net = 0.14915
+        assert abs(matrix.total_cost - 0.85) < 1e-9
+        assert abs(matrix.worst_case_payoff - 0.14915) < 1e-9
         # Both scenarios have identical payoff (direction-neutral)
         assert all(abs(s.payoff - matrix.worst_case_payoff) < 1e-9 for s in matrix.scenarios)
 
@@ -142,11 +141,22 @@ class TestDivergenceService:
         count = svc.scan([a, b])
         assert count == 0
 
+    def test_cross_run_deduplication(self):
+        """No new candidate created if one already exists in DB for this pair."""
+        a = _market("pm:a", "pm", 0.60)
+        b = _market("pm:b", "pm", 0.55)
+        rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
+        svc, _ = self._make_service([rel])
+        svc._candidate_repo.candidate_exists.return_value = True
+        count = svc.scan([a, b])
+        assert count == 0
+        svc._candidate_repo.create.assert_not_called()
+
     def test_duplicate_relations_not_double_counted(self):
         a = _market("pm:a", "pm", 0.60)
         b = _market("pm:b", "pm", 0.55)
         rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
-        svc, session = self._make_service([rel])
+        svc, _ = self._make_service([rel])
         svc._graph_repo.get_relations.side_effect = lambda mid: [rel]
         count = svc.scan([a, b])
         assert count == 1
@@ -156,6 +166,16 @@ class TestDivergenceService:
         a = _market_empty_prices("pm:a", "pm")
         b = _market_empty_prices("pm:b", "pm")
         rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
-        svc, session = self._make_service([rel])
+        svc, _ = self._make_service([rel])
+        count = svc.scan([a, b])
+        assert count == 0
+
+    def test_none_outcome_price_skipped(self):
+        """Markets with a None element in outcome_prices must not raise TypeError."""
+        a = _market("pm:a", "pm", 0.60)
+        b = _market("pm:b", "pm", 0.55)
+        a.outcome_prices = [None, 0.40]
+        rel = _rel("pm:a", "pm:b", RelationType.MUTUALLY_EXCLUSIVE)
+        svc, _ = self._make_service([rel])
         count = svc.scan([a, b])
         assert count == 0

@@ -17,13 +17,13 @@ class TestPipelineRunner:
         session.commit = MagicMock()
 
         with patch("parallax.pipeline.runner.MarketRepository") as MockMarket, \
-             patch("parallax.pipeline.runner.PostgresGraphRepository") as MockGraph, \
-             patch("parallax.pipeline.runner.AuditService") as MockAudit, \
+             patch("parallax.pipeline.runner.PostgresGraphRepository"), \
+             patch("parallax.pipeline.runner.AuditService"), \
              patch("parallax.pipeline.runner.ProverService") as MockProver, \
              patch("parallax.pipeline.runner.DivergenceService") as MockDivergence, \
              patch("parallax.pipeline.runner.CandidateRepository") as MockCandidates, \
-             patch("parallax.pipeline.runner.CourtService") as MockCourt, \
-             patch("parallax.pipeline.runner.SimulatorService") as MockSimulator:
+             patch("parallax.pipeline.runner.CourtService"), \
+             patch("parallax.pipeline.runner.SimulatorService"):
 
             MockMarket.return_value.list_open.return_value = []
             MockProver.return_value.run.return_value = 3

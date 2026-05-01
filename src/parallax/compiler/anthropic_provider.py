@@ -45,7 +45,7 @@ class AnthropicCompilerProvider(CompilerProvider):
             f"Outcomes: {', '.join(market.outcomes)}"
         )
 
-        response = await self._client.messages.parse(
+        response = await self._client.messages.create(
             model=_MODEL,
             max_tokens=4096,
             system=[
@@ -56,6 +56,14 @@ class AnthropicCompilerProvider(CompilerProvider):
                 }
             ],
             messages=[{"role": "user", "content": user_content}],
-            output_format=ContractSchema,
+            tools=[
+                {
+                    "name": "compile_contract",
+                    "description": "Output the compiled prediction market contract schema.",
+                    "input_schema": ContractSchema.model_json_schema(),
+                }
+            ],
+            tool_choice={"type": "tool", "name": "compile_contract"},
         )
-        return response.parsed_output
+        tool_block = next(b for b in response.content if b.type == "tool_use")
+        return ContractSchema.model_validate(tool_block.input)

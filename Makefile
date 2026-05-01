@@ -16,6 +16,6 @@ lint:
 pipeline:
 	uv run python -m parallax.pipeline.runner
 api:
-	uv run uvicorn parallax.api.main:app --reload --port 8000
+	uv run uvicorn parallax.api.app:app --reload --port 8000
 dev:
-	docker compose up -d && uv run uvicorn parallax.api.main:app --reload --port 8000
+	docker compose up -d && uv run uvicorn parallax.api.app:app --reload --port 8000

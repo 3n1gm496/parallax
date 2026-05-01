@@ -11,7 +11,6 @@ from parallax.shared.schemas import (
     Scenario,
 )
 
-_DEFAULT_FRICTION_BPS = 20
 _MIN_PROFIT_AFTER_FRICTION = 0.005  # 0.5% minimum edge
 
 
@@ -22,7 +21,7 @@ class DivergenceService:
         self,
         session: Session,
         graph_repo: GraphRepository,
-        friction_bps: int = _DEFAULT_FRICTION_BPS,
+        friction_bps: int = 50,
     ) -> None:
         self._session = session
         self._graph_repo = graph_repo
@@ -57,6 +56,8 @@ class DivergenceService:
                     matrix = self._check_equivalent(a, b)
 
                 if matrix and matrix.worst_case_payoff > _MIN_PROFIT_AFTER_FRICTION:
+                    if self._candidate_repo.candidate_exists([a_id, b_id], matrix.opportunity_type):
+                        continue
                     self._candidate_repo.create(
                         market_ids=[a_id, b_id],
                         payoff_matrix=matrix,
@@ -73,18 +74,21 @@ class DivergenceService:
     def _check_mutually_exclusive(
         self, a: RawMarket, b: RawMarket
     ) -> PayoffMatrix | None:
-        """Sell YES on both legs. Profit if sum of YES prices > 1.0 + friction.
+        """Buy NO on both legs (equivalent to selling YES). Profit if YES prices sum > 1.0 + friction.
 
-        Payoff is identical regardless of which leg resolves YES: one always
-        pays out 1.0 while the other expires worthless.  worst_case_payoff is
-        already post-friction; SimulatorService must NOT re-apply friction.
+        total_cost = sum of NO-leg prices = (1-p_a) + (1-p_b): capital deployed,
+        consistent with EQUIVALENT where total_cost = buy_price + (1-sell_price).
+        gross = p_a + p_b - 1.0 (collateral payout minus premium received).
+        worst_case_payoff is post-friction; SimulatorService must NOT re-apply.
         """
         if not a.outcome_prices or not b.outcome_prices:
             return None
         p_a = a.outcome_prices[0]
         p_b = b.outcome_prices[0]
-        total_cost = 1.0  # collateral required: one leg always pays out 1.0
-        gross = p_a + p_b - total_cost
+        if not isinstance(p_a, (int, float)) or not isinstance(p_b, (int, float)):
+            return None
+        total_cost = (1.0 - p_a) + (1.0 - p_b)  # capital deployed: cost of both NO legs
+        gross = p_a + p_b - 1.0
         friction = self._friction_cost(total_cost)
         net = gross - friction
 
@@ -124,6 +128,8 @@ class DivergenceService:
             return None
         p_a = a.outcome_prices[0]
         p_b = b.outcome_prices[0]
+        if not isinstance(p_a, (int, float)) or not isinstance(p_b, (int, float)):
+            return None
         if abs(p_a - p_b) < 0.01:
             return None
 

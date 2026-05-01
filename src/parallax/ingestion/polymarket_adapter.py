@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime
 import httpx
 from parallax.ingestion.adapter import PlatformAdapter
 from parallax.shared.schemas import RawMarketData
@@ -67,7 +67,7 @@ class PolymarketAdapter(PlatformAdapter):
                 market_id=str(raw["id"]),
                 title=raw.get("question", ""),
                 description=raw.get("description", ""),
-                resolution_criteria=raw.get("resolutionSource", ""),
+                resolution_criteria=raw.get("description", raw.get("resolutionSource", "")),
                 outcomes=outcomes,
                 outcome_prices=outcome_prices,
                 category=raw.get("category"),

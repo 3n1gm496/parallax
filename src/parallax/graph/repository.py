@@ -1,6 +1,5 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
-import uuid
 from parallax.shared.schemas import RelationType
 
 

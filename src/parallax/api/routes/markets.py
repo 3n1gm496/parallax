@@ -1,5 +1,5 @@
 from __future__ import annotations
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from parallax.api.deps import get_session
 from parallax.ingestion.market_repository import MarketRepository
@@ -10,10 +10,12 @@ router = APIRouter(tags=["markets"])
 
 @router.get("/markets", response_model=list[MarketSummary])
 def list_markets(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     session: Session = Depends(get_session),
 ) -> list[MarketSummary]:
     repo = MarketRepository(session)
-    rows = repo.list_open()
+    rows = repo.list_open(limit=limit, offset=offset)
     return [
         MarketSummary(
             id=r.id,

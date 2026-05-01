@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 from parallax.api.app import app
 from parallax.api.deps import get_session
-from parallax.db.models import AuditEvent, OpportunityCandidate
+from parallax.db.models import OpportunityCandidate
 from parallax.shared.schemas import (
     CourtDecision,
     Leg,
@@ -60,14 +60,12 @@ class TestHealthRoute:
 
 class TestCandidatesRoute:
     def test_list_candidates_empty(self):
-        session = _mock_session()
-        session.query.return_value.filter_by.return_value.all.return_value = []
-        app.dependency_overrides[get_session] = lambda: session
-        client = TestClient(app)
-        resp = client.get("/api/candidates")
+        with patch("parallax.api.routes.candidates.CandidateRepository") as MockRepo:
+            MockRepo.return_value.list_open.return_value = []
+            client = TestClient(app)
+            resp = client.get("/api/candidates")
         assert resp.status_code == 200
         assert resp.json() == []
-        app.dependency_overrides.clear()
 
     def test_get_candidate_not_found(self):
         session = _mock_session()

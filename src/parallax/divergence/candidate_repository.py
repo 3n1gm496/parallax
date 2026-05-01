@@ -33,10 +33,23 @@ class CandidateRepository:
     def get(self, candidate_id: str) -> OpportunityCandidate | None:
         return self._session.get(OpportunityCandidate, uuid.UUID(candidate_id))
 
-    def list_open(self) -> list[OpportunityCandidate]:
+    def candidate_exists(self, market_ids: list[str], opportunity_type: OpportunityType) -> bool:
+        """Return True if an open candidate already covers this market pair and type."""
+        target = frozenset(market_ids)
+        rows = (
+            self._session.query(OpportunityCandidate)
+            .filter_by(opportunity_type=opportunity_type.value, status="open")
+            .all()
+        )
+        return any(frozenset(row.market_ids) == target for row in rows)
+
+    def list_open(self, limit: int = 100, offset: int = 0) -> list[OpportunityCandidate]:
         return (
             self._session.query(OpportunityCandidate)
             .filter_by(status="open")
+            .order_by(OpportunityCandidate.detected_at.desc())
+            .offset(offset)
+            .limit(limit)
             .all()
         )
 

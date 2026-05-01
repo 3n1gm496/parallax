@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from parallax.db.models import OpportunityCandidate, PaperPosition
-from parallax.shared.schemas import CourtDecision, Leg, PayoffMatrix
+from parallax.shared.schemas import PayoffMatrix
 
 
 class TrackerService:

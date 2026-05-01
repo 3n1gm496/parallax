@@ -1,7 +1,7 @@
 """Smoke tests for CourtService, SimulatorService, AutopsyService stubs."""
 import uuid
 from unittest.mock import MagicMock
-from parallax.db.models import AutopsyRecord, OpportunityCandidate
+from parallax.db.models import OpportunityCandidate
 from parallax.court.service import CourtService
 from parallax.simulator.service import SimulatorService
 from parallax.autopsy.service import AutopsyService

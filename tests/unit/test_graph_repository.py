@@ -1,5 +1,5 @@
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.db.models import MarketRelation
 from parallax.shared.schemas import RelationType

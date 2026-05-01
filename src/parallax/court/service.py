@@ -20,6 +20,7 @@ class CourtService:
         if candidate is None:
             raise ValueError(f"Candidate {candidate_id} not found")
 
+        # TODO Slice 2: replace with real risk gating (vol surface, oracle risk, liquidity check)
         decision = (
             CourtDecision.APPROVED
             if candidate.worst_case_payoff > 0

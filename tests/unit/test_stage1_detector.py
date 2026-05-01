@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 from parallax.db.models import RawMarket
 from parallax.detection.stage1 import Stage1ConstraintDetector
