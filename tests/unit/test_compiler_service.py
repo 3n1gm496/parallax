@@ -1,6 +1,5 @@
 from __future__ import annotations
-import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 import pytest
 from parallax.compiler.service import CompilerService
@@ -81,7 +80,7 @@ class TestCompilerService:
     def test_get_recent_contract_returns_none_for_new_market(self):
         session = MagicMock()
         provider = MagicMock()
-        session.query.return_value.filter_by.return_value.order_by.return_value.first.return_value = None
+        session.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
         svc = CompilerService(session, provider)
         result = svc._get_recent_contract("pm:a")
         assert result is None

@@ -54,7 +54,10 @@ class CompilerService:
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=_RECOMPILE_AFTER_HOURS)
         return (
             self._session.query(CompiledContract)
-            .filter_by(raw_market_id=market_id)
+            .filter(
+                CompiledContract.raw_market_id == market_id,
+                CompiledContract.compiled_at >= cutoff,
+            )
             .order_by(CompiledContract.compiled_at.desc())
             .first()
         )
