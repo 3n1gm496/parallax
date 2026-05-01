@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     polymarket_max_events_per_poll: int = 50
     friction_bps: int = 50
     compiler_min_confidence: float = 0.5
+    kalshi_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

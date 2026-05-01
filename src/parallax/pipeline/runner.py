@@ -13,7 +13,10 @@ from parallax.court.service import CourtService
 from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
 from parallax.graph.postgres_repository import PostgresGraphRepository
+from parallax.ingestion.ingestor import IngestorService
+from parallax.ingestion.kalshi_adapter import KalshiAdapter
 from parallax.ingestion.market_repository import MarketRepository
+from parallax.ingestion.polymarket_adapter import PolymarketAdapter
 from parallax.detection.stage2 import Stage2LLMDetector
 from parallax.prover.service import ProverService
 from parallax.shared.schemas import RunSummary
@@ -32,12 +35,24 @@ class PipelineRunner:
 
     async def run_once(self) -> RunSummary:
         errors: list[str] = []
+        markets_ingested = 0
         contracts_compiled = 0
         relations_detected = 0
         candidates_found = 0
         candidates_watchlisted = 0
 
         try:
+            adapters = [PolymarketAdapter(max_events=settings.polymarket_max_events_per_poll)]
+            if settings.kalshi_api_key:
+                adapters.append(KalshiAdapter(api_key=settings.kalshi_api_key))
+            ingestor = IngestorService(adapters, self._session_factory)
+            try:
+                counts = await ingestor.run_once()
+                markets_ingested = sum(counts.values())
+            except Exception as exc:
+                log.warning("pipeline: ingestion failed: %s", exc)
+                errors.append(f"ingestion:{exc}")
+
             with self._session_factory() as session:
                 market_repo = MarketRepository(session)
                 graph_repo = PostgresGraphRepository(session)
@@ -94,7 +109,7 @@ class PipelineRunner:
             errors.append(str(exc))
 
         return RunSummary(
-            markets_ingested=0,
+            markets_ingested=markets_ingested,
             contracts_compiled=contracts_compiled,
             events_resolved=0,
             relations_detected=relations_detected,

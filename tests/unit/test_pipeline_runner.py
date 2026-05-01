@@ -28,18 +28,23 @@ class TestPipelineRunner:
              patch("parallax.pipeline.runner.SimulatorService"), \
              patch("parallax.pipeline.runner.CompilerService") as MockCompiler, \
              patch("parallax.pipeline.runner.AnthropicCompilerProvider"), \
-             patch("parallax.pipeline.runner.Stage2LLMDetector"):
+             patch("parallax.pipeline.runner.Stage2LLMDetector"), \
+             patch("parallax.pipeline.runner.IngestorService") as MockIngestor, \
+             patch("parallax.pipeline.runner.PolymarketAdapter"), \
+             patch("parallax.pipeline.runner.KalshiAdapter"):
 
             MockMarket.return_value.list_open.return_value = []
             MockProver.return_value.run = AsyncMock(return_value=3)
             MockDivergence.return_value.scan.return_value = 2
             MockCandidates.return_value.list_open.return_value = []
             MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={"polymarket": 5})
 
             runner = self._make_runner(session)
             summary = await runner.run_once()
 
         assert isinstance(summary, RunSummary)
+        assert summary.markets_ingested == 5
         assert summary.relations_detected == 3
         assert summary.candidates_found == 2
         assert summary.errors == []
@@ -58,13 +63,17 @@ class TestPipelineRunner:
              patch("parallax.pipeline.runner.SimulatorService"), \
              patch("parallax.pipeline.runner.CompilerService") as MockCompiler, \
              patch("parallax.pipeline.runner.AnthropicCompilerProvider"), \
-             patch("parallax.pipeline.runner.Stage2LLMDetector"):
+             patch("parallax.pipeline.runner.Stage2LLMDetector"), \
+             patch("parallax.pipeline.runner.IngestorService") as MockIngestor, \
+             patch("parallax.pipeline.runner.PolymarketAdapter"), \
+             patch("parallax.pipeline.runner.KalshiAdapter"):
 
             MockMarket.return_value.list_open.return_value = []
             MockProver.return_value.run = AsyncMock(side_effect=RuntimeError("boom"))
             MockDivergence.return_value.scan.return_value = 0
             MockCandidates.return_value.list_open.return_value = []
             MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={})
 
             runner = self._make_runner(session)
             summary = await runner.run_once()

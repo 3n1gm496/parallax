@@ -97,7 +97,7 @@ class TestProverServiceStage2:
             evidence={"rule": "intra_group"},
         )
         svc, graph_repo = self._make_prover([spec], classifier_result=None)
-        count = await svc.run([])
+        await svc.run([])
         graph_repo.add_relation.assert_called_once()
         svc._stage2.classify.assert_not_called()
 
@@ -131,7 +131,7 @@ class TestProverServiceStage2:
         )
         svc._get_contract = MagicMock(return_value=contract)
 
-        count = await svc.run([])
+        await svc.run([])
         svc._stage2.classify.assert_called_once()
         graph_repo.add_relation.assert_called_once()
 
