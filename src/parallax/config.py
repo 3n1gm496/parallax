@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     polymarket_polling_interval_seconds: int = 300
     polymarket_max_events_per_poll: int = 50
     friction_bps: int = 50
+    compiler_min_confidence: float = 0.5
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

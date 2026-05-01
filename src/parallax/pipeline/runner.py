@@ -6,6 +6,8 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from parallax.audit.service import AuditService
+from parallax.compiler.anthropic_provider import AnthropicCompilerProvider
+from parallax.compiler.service import CompilerService
 from parallax.config import settings
 from parallax.court.service import CourtService
 from parallax.divergence.candidate_repository import CandidateRepository
@@ -22,13 +24,14 @@ SessionFactory = Callable[[], AbstractContextManager[Session]]
 
 
 class PipelineRunner:
-    """Orchestrate a single pipeline run: prove → diverge → court → simulate."""
+    """Orchestrate a single pipeline run: compile → prove → diverge → court → simulate."""
 
     def __init__(self, session_factory: SessionFactory) -> None:
         self._session_factory = session_factory
 
-    def run_once(self) -> RunSummary:
+    async def run_once(self) -> RunSummary:
         errors: list[str] = []
+        contracts_compiled = 0
         relations_detected = 0
         candidates_found = 0
         candidates_watchlisted = 0
@@ -41,6 +44,22 @@ class PipelineRunner:
 
                 open_markets = market_repo.list_open()
                 log.info("pipeline: %d open markets loaded", len(open_markets))
+
+                provider = AnthropicCompilerProvider()
+                compiler_svc = CompilerService(session, provider)
+                for market in open_markets:
+                    try:
+                        await compiler_svc.compile(market)
+                        contracts_compiled += 1
+                    except Exception as exc:
+                        log.warning("pipeline: compile failed for %s: %s", market.id, exc)
+                        errors.append(f"compile:{market.id}:{exc}")
+                audit_svc.record(
+                    "pipeline.compiler.complete",
+                    "pipeline",
+                    "global",
+                    {"compiled": contracts_compiled},
+                )
 
                 prover = ProverService(session, graph_repo)
                 relations_detected = prover.run(open_markets)
@@ -73,7 +92,7 @@ class PipelineRunner:
 
         return RunSummary(
             markets_ingested=0,
-            contracts_compiled=0,
+            contracts_compiled=contracts_compiled,
             events_resolved=0,
             relations_detected=relations_detected,
             candidates_found=candidates_found,
@@ -83,9 +102,10 @@ class PipelineRunner:
 
 
 if __name__ == "__main__":
+    import asyncio
     import logging
     logging.basicConfig(level=logging.INFO)
     from parallax.db.session import session_scope
     runner = PipelineRunner(session_scope)
-    summary = runner.run_once()
+    summary = asyncio.run(runner.run_once())
     print(summary)
