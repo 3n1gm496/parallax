@@ -33,3 +33,10 @@ markers = ["integration: requires postgres and external APIs"]
 line-length = 100
 target-version = "py312"
 src = ["src"]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.13.0",
+    "pytest>=9.0.3",
+    "pytest-anyio>=0.0.0",
+]
