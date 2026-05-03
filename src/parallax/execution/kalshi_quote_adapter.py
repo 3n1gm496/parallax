@@ -17,9 +17,11 @@ class KalshiQuoteAdapter:
         self,
         http_client: httpx.AsyncClient | None = None,
         timeout: float = 5.0,
+        api_key: str = "",
     ) -> None:
         self._client = http_client
         self._timeout = timeout
+        self._api_key = api_key
 
     async def fetch_snapshot(
         self, market_id: str, outcome: str
@@ -41,9 +43,13 @@ class KalshiQuoteAdapter:
         market_id: str,
         outcome: str,
     ) -> OrderbookSnapshot | None:
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         resp = await client.get(
             f"{_KALSHI_BASE}/markets/{market_id}/orderbook",
             timeout=self._timeout,
+            headers=headers,
         )
         if resp.status_code != 200:
             return None

@@ -23,7 +23,8 @@ class OrderbookFetcher:
             timeout=settings.orderbook_fetch_timeout_seconds
         )
         self._kalshi = kalshi_adapter or KalshiQuoteAdapter(
-            timeout=settings.orderbook_fetch_timeout_seconds
+            timeout=settings.orderbook_fetch_timeout_seconds,
+            api_key=settings.kalshi_api_key,
         )
 
     async def fetch(

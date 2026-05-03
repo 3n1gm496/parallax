@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     court_max_quote_staleness_seconds: float = 60.0
     court_min_depth_size: float = 10.0
     court_partial_fill_inversion_threshold: float = 0.4
+    kalshi_api_key: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

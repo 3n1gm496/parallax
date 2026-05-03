@@ -88,3 +88,37 @@ def test_parse_kalshi_sides_empty():
     bids, asks = _parse_kalshi_sides({}, "YES")
     assert bids.levels == []
     assert asks.levels == []
+
+
+@pytest.mark.anyio
+async def test_fetch_snapshot_sends_auth_header_when_key_set():
+    body = {
+        "orderbook": {
+            "yes": [[55, 100]],
+            "no": [[46, 80]],
+        }
+    }
+    client = _mock_client(200, body)
+    adapter = KalshiQuoteAdapter(http_client=client, api_key="test-key-abc")
+    await adapter.fetch_snapshot("KXTEST-24", "YES")
+
+    call_kwargs = client.get.call_args[1]
+    assert "headers" in call_kwargs
+    assert call_kwargs["headers"]["Authorization"] == "Bearer test-key-abc"
+
+
+@pytest.mark.anyio
+async def test_fetch_snapshot_no_auth_header_when_key_empty():
+    body = {
+        "orderbook": {
+            "yes": [[55, 100]],
+            "no": [],
+        }
+    }
+    client = _mock_client(200, body)
+    adapter = KalshiQuoteAdapter(http_client=client, api_key="")
+    await adapter.fetch_snapshot("KXTEST-24", "YES")
+
+    call_kwargs = client.get.call_args[1]
+    headers = call_kwargs.get("headers", {})
+    assert "Authorization" not in headers
