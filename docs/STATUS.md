@@ -125,6 +125,20 @@ Open paper positions are now automatically settled when all underlying markets h
 - `PipelineRunner.run_once()` invokes scanner after the candidate loop; scanner failures are caught and logged without aborting the run
 - `positions_settled` in `RunSummary` and `RunProofRecord` now reflects auto-settled positions
 
+## CLOB Adapter Smoke Tests (Fase 7 — 2026-05-03)
+
+The CLOB adapters are now verified against real network endpoints:
+
+- `KalshiQuoteAdapter` gains optional `api_key: str = ""` constructor param; passes `Authorization: Bearer {key}` header when non-empty
+- `Settings.kalshi_api_key: str = ""` — set via `KALSHI_API_KEY` env var; forwarded by `OrderbookFetcher` at construction time
+- `tests/smoke/` — new smoke test directory with `SMOKE_CLOB=1` skip guard (same pattern as integration tests)
+- `tests/smoke/test_clob_smoke.py` — two live tests:
+  - `test_polymarket_clob_fetch_live`: resolves a live market from Gamma API (parses JSON-encoded `clobTokenIds`/`outcomes` fields), fetches CLOB book, asserts snapshot shape — **confirmed passing** against live Polymarket CLOB
+  - `test_kalshi_orderbook_fetch_live`: attempts Kalshi orderbook fetch; accepts `None` gracefully when no API key set; verifies full shape when `KALSHI_API_KEY` is present — **confirmed passing** (returns None gracefully without key)
+- Run with: `SMOKE_CLOB=1 pytest tests/smoke/ -v`
+- Run with Kalshi key: `SMOKE_CLOB=1 KALSHI_API_KEY=<key> SMOKE_KALSHI_TICKER=<ticker> pytest tests/smoke/ -v`
+- Gamma API discovery note: `clobTokenIds` and `outcomes` fields are JSON-encoded strings, not parsed lists
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
@@ -133,7 +147,7 @@ Open paper positions are now automatically settled when all underlying markets h
 - court gating is structured and opportunity-aware, but still threshold-based
 - execution simulation defaults to heuristic when `orderbook_enabled=False`; snapshot path available when enabled
 - settlement scanner only infers resolution from `outcome_prices[0]`; unusual oracle formats (multi-outcome, scaled) require manual settlement
-- orderbook snapshot path is not yet tested against live CLOB APIs; adapters are implemented and unit-tested with mocks
+- orderbook snapshot path is smoke-tested against live CLOB APIs (`SMOKE_CLOB=1`); Polymarket CLOB confirmed reachable; Kalshi requires `KALSHI_API_KEY` for live data
 - identity review queue ordering is rule-based rather than learned from a historical calibration model
 - policy recommendations are versioned and evidence-backed, but still heuristic rather than learned
 
