@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from parallax.config import settings
+from parallax.execution.token_discovery import TokenDiscoveryService
 from parallax.ingestion.adapter import PlatformAdapter
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.audit.service import AuditService
@@ -71,6 +72,13 @@ class IngestorService:
                         f"{data.platform}:{data.market_id}",
                         {"platform": data.platform, "title": data.title},
                     )
+            token_count = TokenDiscoveryService(session).process(markets)
+            audit.record(
+                "ingestion.token_discovery.complete",
+                "ingestion",
+                adapter.platform_name,
+                {"platform": adapter.platform_name, "tokens_upserted": token_count},
+            )
             session.commit()
         return len(markets)
 

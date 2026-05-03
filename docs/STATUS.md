@@ -66,6 +66,17 @@ The execution layer now has a snapshot-based path alongside the heuristic path:
 
 Migration chain: `0010_venue_tokens` → `0011_orderbook_snapshots` applied.
 
+## Token Discovery Layer (Fase 2 — 2026-05-03)
+
+`venue_tokens` is now populated during ingestion so the snapshot-based court path is reachable on real Polymarket candidates:
+
+- `RawMarketData` carries `token_ids: dict[str, str]` — populated by `PolymarketAdapter._extract_token_ids()`
+- Shape A (`tokens[i].token_id + outcome`) and Shape B (`clobTokenIds[]` parallel to `outcomes[]`) both handled
+- `TokenDiscoveryService` (`src/parallax/execution/token_discovery.py`): sync, upserts (platform, raw_market_id, outcome) → token_id rows during `IngestorService._ingest_one()`, after market upsert loop
+- `PipelineRunner._persist_snapshot_sync()`: persists fetched snapshots to `orderbook_snapshots` inside `begin_nested()` before `evaluate_with_snapshots()`
+- Kalshi orderbook path does not require token IDs (ticker = market_id directly)
+- The `evaluate_with_snapshots` path is now end-to-end reachable when `orderbook_enabled=True` and Polymarket markets have been ingested
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system

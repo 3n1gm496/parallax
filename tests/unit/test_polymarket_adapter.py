@@ -139,3 +139,43 @@ class TestPolymarketAdapter:
 
         assert len(markets) == 1
         assert mock_client.get.await_count == 2
+
+
+class TestExtractTokenIds:
+    def test_shape_a_tokens_list(self):
+        raw = {
+            "tokens": [
+                {"token_id": "tok-yes", "outcome": "YES", "price": 0.6},
+                {"token_id": "tok-no", "outcome": "NO", "price": 0.4},
+            ]
+        }
+        assert PolymarketAdapter._extract_token_ids(raw) == {"YES": "tok-yes", "NO": "tok-no"}
+
+    def test_shape_b_clob_token_ids(self):
+        raw = {
+            "outcomes": ["YES", "NO"],
+            "clobTokenIds": ["tid-y", "tid-n"],
+        }
+        assert PolymarketAdapter._extract_token_ids(raw) == {"YES": "tid-y", "NO": "tid-n"}
+
+    def test_shape_a_takes_precedence_over_shape_b(self):
+        raw = {
+            "tokens": [{"token_id": "tok-yes", "outcome": "YES"}],
+            "outcomes": ["YES", "NO"],
+            "clobTokenIds": ["clob-y", "clob-n"],
+        }
+        result = PolymarketAdapter._extract_token_ids(raw)
+        assert result["YES"] == "tok-yes"
+
+    def test_empty_returns_empty(self):
+        assert PolymarketAdapter._extract_token_ids({}) == {}
+
+    def test_parse_includes_token_ids_shape_a(self):
+        adapter = PolymarketAdapter()
+        raw = _raw_market(tokens=[
+            {"outcome": "Yes", "price": 0.6, "token_id": "tok-y"},
+            {"outcome": "No", "price": 0.4, "token_id": "tok-n"},
+        ])
+        result = adapter._parse(raw)
+        assert result is not None
+        assert result.token_ids == {"Yes": "tok-y", "No": "tok-n"}

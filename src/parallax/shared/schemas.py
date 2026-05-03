@@ -90,6 +90,7 @@ class RawMarketData(BaseModel):
     is_closed: bool
     resolution_source: str | None = None
     raw_payload: dict
+    token_ids: dict[str, str] = Field(default_factory=dict)
 
 
 class AmbiguityFlag(BaseModel):

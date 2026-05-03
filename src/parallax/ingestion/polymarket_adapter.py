@@ -97,9 +97,28 @@ class PolymarketAdapter(PlatformAdapter):
                 is_closed=bool(raw.get("closed", False)),
                 resolution_source=raw.get("resolutionSource"),
                 raw_payload=raw,
+                token_ids=PolymarketAdapter._extract_token_ids(raw),
             )
         except (KeyError, ValueError):
             return None
+
+    @staticmethod
+    def _extract_token_ids(raw: dict) -> dict[str, str]:
+        result: dict[str, str] = {}
+        tokens = raw.get("tokens")
+        if isinstance(tokens, list):
+            for t in tokens:
+                if isinstance(t, dict) and t.get("token_id") and t.get("outcome"):
+                    result[str(t["outcome"])] = str(t["token_id"])
+            if result:
+                return result
+        outcomes = raw.get("outcomes", [])
+        clob_ids = raw.get("clobTokenIds", [])
+        if isinstance(outcomes, list) and isinstance(clob_ids, list):
+            for outcome, tid in zip(outcomes, clob_ids):
+                if outcome and tid:
+                    result[str(outcome)] = str(tid)
+        return result
 
     @staticmethod
     def _parse_outcomes(raw: dict) -> tuple[list[str], list[float]]:

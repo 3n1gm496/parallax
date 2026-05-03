@@ -119,6 +119,22 @@ async def _fetch_candidate_snapshots(
     return snapshots
 
 
+def _persist_snapshot_sync(session: Session, snap: OrderbookSnapshot) -> None:
+    from parallax.db.models import OrderbookSnapshotRecord
+    record = OrderbookSnapshotRecord(
+        id=snap.id,
+        platform=snap.platform,
+        raw_market_id=snap.market_id,
+        token_id=snap.token_id,
+        outcome=snap.outcome,
+        captured_at=snap.captured_at,
+        bid_levels=[{"price": lv.price, "size": lv.size} for lv in (snap.bids.levels if snap.bids else [])],
+        ask_levels=[{"price": lv.price, "size": lv.size} for lv in (snap.asks.levels if snap.asks else [])],
+        mid_price=snap.mid_price,
+    )
+    session.merge(record)
+
+
 class PipelineRunner:
     """Orchestrate a single pipeline run: compile → prove → diverge → court → simulate."""
 
@@ -289,6 +305,9 @@ class PipelineRunner:
                             )
                         with session.begin_nested():
                             if snapshots is not None:
+                                for snap in snapshots.values():
+                                    if snap is not None:
+                                        _persist_snapshot_sync(session, snap)
                                 decision = court_svc.evaluate_with_snapshots(cid, snapshots, run_id=run_id)
                             else:
                                 decision = court_svc.evaluate(cid, run_id=run_id)
