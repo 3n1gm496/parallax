@@ -58,10 +58,11 @@ class CourtService:
         self,
         candidate_id: str,
         snapshots: dict[str, OrderbookSnapshot | None],
-    ) -> tuple[CourtAssessment, SimulationResult]:
+    ) -> tuple[CourtAssessment, SimulationResult, RiskScore | None]:
         """Run assessment using snapshot-based simulation, with extra orderbook gates."""
         simulation = self._simulator.simulate_snapshot(candidate_id, snapshots)
-        base_assessment, _ = self._run_assessment(candidate_id, simulation)
+        adjusted_risk = self._compute_adjusted_risk(candidate_id, simulation)
+        base_assessment, _ = self._run_assessment(candidate_id, simulation, risk_override=adjusted_risk)
 
         # Inject orderbook-specific gates
         extra_gates, extra_reasons, downgrade = self._orderbook_gates(simulation)
@@ -83,7 +84,16 @@ class CourtService:
             gates=gates,
             policy_version="court-v2-snapshot",
         )
-        return assessment, simulation
+        return assessment, simulation, adjusted_risk
+
+    def _compute_adjusted_risk(
+        self, candidate_id: str, simulation: SimulationResult
+    ) -> RiskScore | None:
+        candidate = self._repo.get(candidate_id)
+        if candidate is None or not candidate.risk_scores:
+            return None
+        base = RiskScore.model_validate(candidate.risk_scores)
+        return RiskScore.adjust_from_simulation(base, simulation)
 
     @staticmethod
     def _orderbook_gates(
@@ -172,13 +182,16 @@ class CourtService:
         self,
         candidate_id: str,
         simulation: SimulationResult,
+        risk_override: RiskScore | None = None,
     ) -> tuple[CourtAssessment, SimulationResult]:
         """Internal: run the assessment logic given a pre-computed simulation."""
         candidate = self._repo.get(candidate_id)
         if candidate is None:
             raise ValueError(f"Candidate {candidate_id} not found")
 
-        risk = RiskScore.model_validate(candidate.risk_scores) if candidate.risk_scores else None
+        risk = risk_override if risk_override is not None else (
+            RiskScore.model_validate(candidate.risk_scores) if candidate.risk_scores else None
+        )
         opportunity_type = OpportunityType(candidate.opportunity_type)
         markets = [
             market
@@ -496,8 +509,8 @@ class CourtService:
         run_id: str | None = None,
     ) -> CourtDecision:
         """Evaluate using snapshot-based simulation; persist decision and snapshot."""
-        assessment, simulation = self.assess_with_snapshots(candidate_id, snapshots)
-        return self._persist_evaluation(candidate_id, assessment, simulation, run_id)
+        assessment, simulation, adjusted_risk = self.assess_with_snapshots(candidate_id, snapshots)
+        return self._persist_evaluation(candidate_id, assessment, simulation, run_id, adjusted_risk=adjusted_risk)
 
     def evaluate(self, candidate_id: str, run_id: str | None = None) -> CourtDecision:
         assessment, simulation = self.assess_with_simulation(candidate_id)
@@ -509,12 +522,14 @@ class CourtService:
         assessment: CourtAssessment,
         simulation: SimulationResult,
         run_id: str | None,
+        *,
+        adjusted_risk: RiskScore | None = None,
     ) -> CourtDecision:
         decision = assessment.decision
         self._repo.update_decision(candidate_id, decision)
         candidate = self._repo.get(candidate_id)
-        risk = None
-        if candidate is not None and candidate.risk_scores:
+        risk = adjusted_risk
+        if risk is None and candidate is not None and candidate.risk_scores:
             risk = RiskScore.model_validate(candidate.risk_scores)
         relation_evidence = load_relation_evidence(self._session, candidate.market_ids) if candidate is not None else None
         self._repo.upsert_decision_snapshot(
