@@ -139,6 +139,18 @@ The CLOB adapters are now verified against real network endpoints:
 - Run with Kalshi key: `SMOKE_CLOB=1 KALSHI_API_KEY=<key> SMOKE_KALSHI_TICKER=<ticker> pytest tests/smoke/ -v`
 - Gamma API discovery note: `clobTokenIds` and `outcomes` fields are JSON-encoded strings, not parsed lists
 
+## Proof Infrastructure (Fase 8 — 2026-05-03)
+
+End-to-end proof infrastructure is in place. The real-data run itself remains blocked pending credentials.
+
+- `GET /api/ops/proof` → `ProofBundleReport` with 7-item self-evaluating checklist:
+  - `database_ok`, `polymarket_ingested`, `kalshi_ingested`, `compilation_ran`, `relations_detected`, `run_proof_exists`, `semantic_ok`
+  - `bundle_status="complete"` only when all seven pass
+- `make proof` — runs the pipeline, then prints the proof bundle capture command
+- `make test-smoke` — runs CLOB smoke tests (`SMOKE_CLOB=1 pytest tests/smoke/`)
+- `docs/proofs/` — intended location for `proof-<timestamp>.json` artifacts produced by real-data runs
+- `docs/RUNBOOK.md` updated: P0.1b smoke test section, `/api/ops/execution` verification, proof bundle capture steps, automated settlement evidence
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
