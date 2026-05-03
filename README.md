@@ -2,11 +2,13 @@
 
 Semantic arbitrage engine for prediction markets with:
 
-- native Polymarket ingestion
-- native Kalshi ingestion
+- native Polymarket and Kalshi ingestion
 - unified structural plus semantic relation analysis
 - divergence scoring, court gating, and execution simulation
-- paper-position lifecycle, settlement, and autopsy
+- snapshot-based CLOB orderbook execution (Polymarket + Kalshi)
+- automated settlement with PnL normalization and autopsy persistence
+- paper-position lifecycle with replay-calibrated fill simulation
+- self-evaluating proof bundle (`GET /api/ops/proof`)
 - FastAPI API surface plus a React operator console
 
 ## Read This First
@@ -65,6 +67,8 @@ make lint
 make pipeline
 make api
 make verify
+make test-smoke      # live CLOB adapter smoke tests (SMOKE_CLOB=1)
+make proof           # run pipeline + print proof bundle capture command
 ```
 
 Frontend:
@@ -94,7 +98,13 @@ Read APIs:
 - `GET /api/ops/runs`
 - `GET /api/ops/runs/{run_id}`
 - `GET /api/ops/evaluation`
+- `GET /api/ops/backtest`
+- `GET /api/ops/policy`
 - `GET /api/ops/identity-review`
+- `GET /api/ops/relation-sets`
+- `GET /api/ops/relation-sets/{set_key}`
+- `GET /api/ops/execution`
+- `GET /api/ops/proof`
 - `GET /api/positions`
 - `GET /api/positions/{id}`
 
@@ -109,4 +119,8 @@ Write API:
 - Candidate detail computes live `simulation_result` and `court_assessment` on read.
 - Court evaluation also persists a decision-time snapshot so operator review can compare stored decision evidence against current live recomputation.
 - `/api/ops/metrics` is the aggregate proof surface; `/api/ops/runs` is the stable persisted run-proof surface.
+- `/api/ops/proof` returns a `ProofBundleReport` — a 7-item self-evaluating checklist whose `bundle_status="complete"` is the strongest proof claim after a real-data run.
+- `/api/ops/execution` exposes CLOB orderbook coverage, snapshot counts, and execution model distribution.
+- When `orderbook_enabled=True`, the court path uses VWAP-based snapshot simulation instead of the heuristic estimator.
+- Automated settlement runs each pipeline cycle; positions with deterministic oracle prices are closed and autopsy-labeled automatically.
 - If `ANTHROPIC_API_KEY` is missing, semantic analysis is misconfigured and `/ready` reports that state explicitly.
