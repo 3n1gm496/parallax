@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
+import parallax.divergence.service as divergence_service
 from parallax.db.models import RawMarket
 from parallax.divergence.service import DivergenceService
-from parallax.shared.schemas import RelationType
+from parallax.shared.schemas import IdentityResolutionStatus, RelationEvidenceResponse, RelationType
 import uuid
 
 
@@ -47,9 +48,27 @@ def _rel(a_id: str, b_id: str, rtype: RelationType) -> dict:
         "to_market_id": b_id,
         "relation_type": rtype.value,
         "confidence": 0.9,
-        "evidence": {},
+        "evidence": {"proof_status": "verified", "tradeable_relation": True},
         "created_by": "test",
+        "proof_status": "verified",
+        "tradeable_relation": True,
     }
+
+
+def _relation_evidence(rel: dict, *, identity_status: IdentityResolutionStatus = IdentityResolutionStatus.VERIFIED):
+    evidence = rel.get("evidence", {})
+    return RelationEvidenceResponse(
+        from_market_id=rel["from_market_id"],
+        to_market_id=rel["to_market_id"],
+        relation_type=RelationType(rel["relation_type"]),
+        confidence=rel["confidence"],
+        created_by=rel["created_by"],
+        proof_status="verified",
+        tradeable_relation=True,
+        identity_status=identity_status,
+        semantic_confidence=evidence.get("semantic_confidence"),
+        relation_signals=evidence.get("relation_signals", {}),
+    )
 
 
 class TestDivergenceService:
@@ -61,6 +80,16 @@ class TestDivergenceService:
         svc._candidate_repo = MagicMock()
         svc._candidate_repo.candidate_exists.return_value = False
         svc._candidate_repo.create.return_value = MagicMock()
+        divergence_service.load_relation_evidence = MagicMock(
+            side_effect=lambda _session, market_ids: next(
+                (
+                    _relation_evidence(rel)
+                    for rel in relations
+                    if {rel["from_market_id"], rel["to_market_id"]} == set(market_ids)
+                ),
+                None,
+            )
+        )
         return svc, session
 
     def test_no_markets_finds_nothing(self):
@@ -75,6 +104,7 @@ class TestDivergenceService:
         count = svc.scan([a, b])
         assert count == 1
         svc._candidate_repo.create.assert_called_once()
+        assert "risk_scores" in svc._candidate_repo.create.call_args.kwargs
 
     def test_mutually_exclusive_fairly_priced_no_candidate(self):
         a = _market("pm:a", "pm", 0.50)
@@ -179,3 +209,62 @@ class TestDivergenceService:
         svc, _ = self._make_service([rel])
         count = svc.scan([a, b])
         assert count == 0
+
+    def test_equivalent_candidate_gets_nonempty_risk_score(self):
+        a = _market("pm:a", "pm", 0.40)
+        b = _market("kalshi:b", "kalshi", 0.55)
+        rel = _rel("pm:a", "kalshi:b", RelationType.EQUIVALENT)
+        rel["evidence"] = {"semantic_confidence": 0.8}
+        svc, _ = self._make_service([rel])
+
+        svc.scan([a, b])
+
+        risk_scores = svc._candidate_repo.create.call_args.kwargs["risk_scores"]
+        assert set(risk_scores) == {
+            "oracle_risk",
+            "deadline_risk",
+            "semantic_risk",
+            "execution_risk",
+            "liquidity_risk",
+            "cancellation_risk",
+            "source_trust_risk",
+            "composite",
+            "policy_version",
+        }
+        assert risk_scores["policy_version"] == "risk-v2"
+
+    def test_relation_signals_raise_risk_score_components(self):
+        a = _market("pm:a", "pm", 0.40)
+        b = _market("kalshi:b", "kalshi", 0.55)
+        rel = _rel("pm:a", "kalshi:b", RelationType.EQUIVALENT)
+        rel["evidence"] = {
+            "semantic_confidence": 0.8,
+            "relation_signals": {
+                "oracle_mismatch": True,
+                "deadline_mismatch": True,
+                "ambiguity_level": "high",
+            },
+        }
+        svc, _ = self._make_service([rel])
+
+        svc.scan([a, b])
+
+        risk_scores = svc._candidate_repo.create.call_args.kwargs["risk_scores"]
+        assert risk_scores["oracle_risk"] >= 0.5
+        assert risk_scores["deadline_risk"] >= 0.15
+        assert risk_scores["semantic_risk"] >= 0.3
+        assert risk_scores["source_trust_risk"] >= 0.3
+
+    def test_ambiguous_identity_blocks_candidate_generation(self):
+        a = _market("pm:a", "pm", 0.40)
+        b = _market("kalshi:b", "kalshi", 0.55)
+        rel = _rel("pm:a", "kalshi:b", RelationType.EQUIVALENT)
+        svc, _ = self._make_service([rel])
+        divergence_service.load_relation_evidence = MagicMock(
+            return_value=_relation_evidence(rel, identity_status=IdentityResolutionStatus.AMBIGUOUS)
+        )
+
+        count = svc.scan([a, b])
+
+        assert count == 0
+        svc._candidate_repo.create.assert_not_called()

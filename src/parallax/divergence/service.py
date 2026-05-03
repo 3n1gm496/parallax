@@ -1,12 +1,16 @@
 from __future__ import annotations
 from sqlalchemy.orm import Session
+from parallax.candidates.evidence import load_relation_evidence
+from parallax.candidates.repository import CandidateRepository
 from parallax.db.models import RawMarket
-from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.graph.repository import GraphRepository
+from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import (
+    IdentityResolutionStatus,
     Leg,
     OpportunityType,
     PayoffMatrix,
+    RiskScore,
     RelationType,
     Scenario,
 )
@@ -42,6 +46,16 @@ class DivergenceService:
                     continue
                 seen_pairs.add(pair)
 
+                relation_evidence = load_relation_evidence(self._session, list(pair))
+                if relation_evidence is None:
+                    continue
+                if relation_evidence.identity_status != IdentityResolutionStatus.VERIFIED:
+                    continue
+                if not relation_evidence.tradeable_relation:
+                    continue
+                if str(relation_evidence.proof_status) != "verified":
+                    continue
+
                 rtype = RelationType(rel["relation_type"])
                 a_id, b_id = rel["from_market_id"], rel["to_market_id"]
                 if a_id not in market_map or b_id not in market_map:
@@ -58,11 +72,12 @@ class DivergenceService:
                 if matrix and matrix.worst_case_payoff > _MIN_PROFIT_AFTER_FRICTION:
                     if self._candidate_repo.candidate_exists([a_id, b_id], matrix.opportunity_type):
                         continue
+                    risk_score = self._score_candidate(a, b, relation_evidence)
                     self._candidate_repo.create(
                         market_ids=[a_id, b_id],
                         payoff_matrix=matrix,
                         opportunity_type=matrix.opportunity_type,
-                        risk_scores={},
+                        risk_scores=risk_score.model_dump(),
                     )
                     found += 1
 
@@ -111,6 +126,72 @@ class DivergenceService:
             breaking_scenario=None,
             opportunity_type=OpportunityType.MUTUALLY_EXCLUSIVE_MISPRICING,
             friction_bps=self._friction_bps,
+        )
+
+    def _score_candidate(self, a: RawMarket, b: RawMarket, relation) -> RiskScore:
+        relation_type = RelationType(relation.relation_type if hasattr(relation, "relation_type") else relation["relation_type"])
+        relation_signals = get_relation_signals(relation)
+        semantic_confidence_value = (
+            relation.semantic_confidence
+            if hasattr(relation, "semantic_confidence")
+            else relation.get("evidence", {}).get("semantic_confidence")
+        )
+        semantic_confidence = (
+            float(semantic_confidence_value)
+            if isinstance(semantic_confidence_value, (int, float))
+            else float(relation.confidence if hasattr(relation, "confidence") else relation.get("confidence", 0.5))
+        )
+        semantic_risk = round(max(0.0, min(1.0, 1.0 - semantic_confidence)), 4)
+        if relation_signals["ambiguity_level"] == "high":
+            semantic_risk = min(1.0, round(semantic_risk + 0.2, 4))
+        elif relation_signals["ambiguity_level"] == "medium":
+            semantic_risk = min(1.0, round(semantic_risk + 0.1, 4))
+
+        if relation_type == RelationType.MUTUALLY_EXCLUSIVE:
+            oracle_risk = 0.05
+        else:
+            oracle_risk = 0.2 if a.platform != b.platform else 0.1
+        if relation_signals["oracle_mismatch"]:
+            oracle_risk = min(1.0, round(oracle_risk + 0.3, 4))
+
+        deadline_delta_days = abs((a.deadline - b.deadline).total_seconds()) / 86400
+        deadline_risk = round(min(1.0, deadline_delta_days / 14.0), 4)
+        if relation_signals["deadline_mismatch"]:
+            deadline_risk = min(1.0, round(deadline_risk + 0.15, 4))
+
+        execution_risk = 0.1 if a.platform != b.platform else 0.05
+        if relation_type in {
+            RelationType.EQUIVALENT,
+            RelationType.DUPLICATE,
+            RelationType.SUBSET,
+            RelationType.SUPERSET,
+        }:
+            execution_risk = round(execution_risk + 0.08, 4)
+
+        liquidity_risk = 0.12 if a.platform != b.platform else 0.08
+        cross_platform_spread = abs(float(a.outcome_prices[0]) - float(b.outcome_prices[0]))
+        if cross_platform_spread >= 0.15:
+            liquidity_risk = min(1.0, round(liquidity_risk + 0.08, 4))
+
+        cancellation_risk = 0.05
+        if any(
+            term in " ".join(relation_signals.get("ambiguity_terms", [])).lower()
+            for term in ("void", "cancel", "official", "certif")
+        ):
+            cancellation_risk = 0.18
+
+        source_trust_risk = 0.08 if a.platform == b.platform else 0.16
+        if relation_signals["source_mismatch"] or relation_signals["oracle_mismatch"]:
+            source_trust_risk = min(1.0, round(source_trust_risk + 0.18, 4))
+
+        return RiskScore.combine(
+            oracle=round(oracle_risk, 4),
+            deadline=deadline_risk,
+            semantic=semantic_risk,
+            execution=round(execution_risk, 4),
+            liquidity=round(liquidity_risk, 4),
+            cancellation=round(cancellation_risk, 4),
+            source_trust=round(source_trust_risk, 4),
         )
 
     def _check_equivalent(

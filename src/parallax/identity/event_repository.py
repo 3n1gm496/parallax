@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from sqlalchemy.orm import Session
-from parallax.db.models import CanonicalEvent
+from parallax.db.models import CanonicalEvent, MarketEventLink, RawMarket
 
 
 class EventRepository:
@@ -40,3 +40,11 @@ class EventRepository:
         if domain:
             q = q.filter_by(domain=domain)
         return q.all()
+
+    def list_markets_for_event(self, event_id: uuid.UUID) -> list[RawMarket]:
+        return (
+            self._session.query(RawMarket)
+            .join(MarketEventLink, MarketEventLink.raw_market_id == RawMarket.id)
+            .filter(MarketEventLink.canonical_event_id == event_id)
+            .all()
+        )

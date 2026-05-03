@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from sqlalchemy.sql.elements import BinaryExpression
 from datetime import datetime, timezone
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.db.models import RawMarket
@@ -104,3 +105,17 @@ class TestMarketRepository:
         repo = MarketRepository(session)
         repo.list_by_group("g1")
         session.query.return_value.filter_by.assert_called_with(group_id="g1", is_closed=False)
+
+    def test_list_unlinked_open_applies_open_and_unlinked_filters(self):
+        session = MagicMock()
+        chain = session.query.return_value.filter.return_value.filter.return_value
+        chain.all.return_value = []
+        repo = MarketRepository(session)
+
+        repo.list_unlinked_open()
+
+        assert session.query.called
+        first_filter_arg = session.query.return_value.filter.call_args.args[0]
+        second_filter_arg = session.query.return_value.filter.return_value.filter.call_args.args[0]
+        assert isinstance(first_filter_arg, BinaryExpression)
+        assert second_filter_arg is not None

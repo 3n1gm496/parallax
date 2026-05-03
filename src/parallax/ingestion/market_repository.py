@@ -1,5 +1,7 @@
 from __future__ import annotations
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
+from parallax.db.models import MarketEventLink
 from parallax.db.models import RawMarket
 from parallax.shared.schemas import RawMarketData
 
@@ -60,5 +62,16 @@ class MarketRepository:
         return (
             self._session.query(RawMarket)
             .filter_by(group_id=group_id, is_closed=False)
+            .all()
+        )
+
+    def list_unlinked_open(self) -> list[RawMarket]:
+        link_exists = select(MarketEventLink.raw_market_id).where(
+            MarketEventLink.raw_market_id == RawMarket.id
+        ).exists()
+        return (
+            self._session.query(RawMarket)
+            .filter(RawMarket.is_closed.is_(False))
+            .filter(~link_exists)
             .all()
         )

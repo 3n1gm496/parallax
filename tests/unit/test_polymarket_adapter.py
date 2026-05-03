@@ -1,4 +1,5 @@
 import pytest
+import httpx
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime, timezone
 from parallax.ingestion.polymarket_adapter import PolymarketAdapter
@@ -18,6 +19,23 @@ def _raw_market(market_id="m1", end_date="2025-12-31T00:00:00Z", closed=False, *
             {"outcome": "Yes", "price": 0.6},
             {"outcome": "No", "price": 0.4},
         ],
+    }
+    base.update(kwargs)
+    return base
+
+
+def _raw_market_current_shape(market_id="m2", end_date="2025-12-31T00:00:00Z", closed=False, **kwargs):
+    base = {
+        "id": market_id,
+        "question": "Will Y happen?",
+        "description": "Current payload shape",
+        "resolutionSource": "oracle.com",
+        "endDateIso": end_date,
+        "closed": closed,
+        "category": "crypto",
+        "events": [{"id": "event-2", "slug": "event-two"}],
+        "outcomes": "[\"Yes\", \"No\"]",
+        "outcomePrices": "[\"0.565\", \"0.435\"]",
     }
     base.update(kwargs)
     return base
@@ -62,6 +80,18 @@ class TestPolymarketAdapter:
         assert result is not None
         assert result.outcome_prices == [0.0, 0.4]
 
+    def test_parse_current_payload_shape_uses_events_and_top_level_prices(self):
+        adapter = PolymarketAdapter()
+        raw = _raw_market_current_shape()
+
+        result = adapter._parse(raw)
+
+        assert result is not None
+        assert result.group_id == "event-2"
+        assert result.outcomes == ["Yes", "No"]
+        assert result.outcome_prices == [0.565, 0.435]
+        assert result.deadline == datetime(2025, 12, 31, tzinfo=timezone.utc)
+
     @pytest.mark.anyio
     async def test_fetch_markets_paginates(self):
         adapter = PolymarketAdapter(max_events=3)
@@ -92,3 +122,20 @@ class TestPolymarketAdapter:
         adapter._client = mock_client
         markets = await adapter.fetch_markets()
         assert markets == []
+
+    @pytest.mark.anyio
+    async def test_fetch_markets_retries_transient_connect_error(self):
+        adapter = PolymarketAdapter(max_events=1)
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.json.return_value = [_raw_market()]
+
+        request = httpx.Request("GET", "https://gamma-api.polymarket.com/markets")
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(side_effect=[httpx.ConnectError("dns", request=request), response])
+
+        adapter._client = mock_client
+        markets = await adapter.fetch_markets()
+
+        assert len(markets) == 1
+        assert mock_client.get.await_count == 2

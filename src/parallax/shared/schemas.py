@@ -1,11 +1,29 @@
 from __future__ import annotations
+import json
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Literal
-from pydantic import BaseModel, Field
+from typing import Annotated, Any, Literal
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Probability = Annotated[float, Field(ge=0.0, le=1.0)]
 NonNegativeBps = Annotated[int, Field(ge=0)]
+
+
+def _coerce_json_list(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if not text:
+        return []
+    if not text.startswith("["):
+        return value
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return value
+    return parsed
 
 
 class RelationType(str, Enum):
@@ -15,11 +33,15 @@ class RelationType(str, Enum):
     SUPERSET = "superset"
     MUTUALLY_EXCLUSIVE = "mutually_exclusive"
     EXHAUSTIVE = "exhaustive"
+    EXHAUSTIVE_PARTITION = "exhaustive_partition"
     PREREQUISITE = "prerequisite"
     INVERSE = "inverse"
     SAME_EVENT_DIFFERENT_DEADLINE = "same_event_different_deadline"
     SAME_EVENT_DIFFERENT_ORACLE = "same_event_different_oracle"
     SAME_EVENT_DIFFERENT_SOURCE = "same_event_different_source"
+    SAME_EVENT_FAMILY = "same_event_family"
+    SAME_EVENT_INDEPENDENT = "same_event_independent"
+    RELATED_BUT_NOT_TRADEABLE = "related_but_not_tradeable"
     CORRELATED_ONLY = "correlated_only"
     NOT_RELATED = "not_related"
 
@@ -41,9 +63,17 @@ class CourtDecision(str, Enum):
     APPROVED = "APPROVED"
     WATCHLIST = "WATCHLIST"
     REJECTED = "REJECTED"
+    ABSTAINED = "ABSTAINED"
     PENDING = "PENDING"
     PAPER_TRADE = "PAPER_TRADE"
     CANDIDATE_FOR_LIVE = "CANDIDATE_FOR_LIVE"
+
+
+class IdentityResolutionStatus(str, Enum):
+    VERIFIED = "verified"
+    AMBIGUOUS = "ambiguous"
+    UNRESOLVED = "unresolved"
+    REJECTED = "rejected"
 
 
 class RawMarketData(BaseModel):
@@ -55,7 +85,7 @@ class RawMarketData(BaseModel):
     outcomes: list[str]
     outcome_prices: list[float]
     category: str | None = None
-    group_id: str | None = None   # Polymarket event ID — used for Stage 1 grouping
+    group_id: str | None = None
     deadline: datetime
     is_closed: bool
     resolution_source: str | None = None
@@ -81,6 +111,164 @@ class ContractSchema(BaseModel):
     ambiguity_terms: list[AmbiguityFlag]
     counterexamples: list[Counterexample]
     compiler_confidence: Probability   # 0.0–1.0; calibrated over time
+    canonical_subject: str | None = None
+    canonical_predicate: str | None = None
+    canonical_object: str | None = None
+    comparator: str | None = None
+    threshold_value: str | None = None
+    threshold_comparator: str | None = None
+    threshold: str | None = None
+    temporal_focus: str | None = None
+    temporal_deadline: str | None = None
+    time_scope: str | None = None
+    oracle_focus: str | None = None
+    oracle_scope: str | None = None
+    resolution_exclusions: list[str] = Field(default_factory=list)
+    cancellation_conditions: list[str] = Field(default_factory=list)
+    polarity: Literal["positive", "negative", "unknown"] = "unknown"
+    proposition_family: str | None = None
+    partition_hint: bool = False
+    semantic_tags: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "yes_conditions",
+        "no_conditions",
+        "exclusions",
+        "ambiguity_terms",
+        "counterexamples",
+        "resolution_exclusions",
+        "cancellation_conditions",
+        "semantic_tags",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_list_like_fields(cls, value: Any) -> Any:
+        return _coerce_json_list(value)
+
+    @model_validator(mode="after")
+    def _sync_semantic_aliases(self) -> "ContractSchema":
+        if self.threshold_comparator is None:
+            self.threshold_comparator = self.comparator
+        if self.comparator is None:
+            self.comparator = self.threshold_comparator
+        if self.threshold is None:
+            self.threshold = self.threshold_value
+        if self.threshold_value is None:
+            self.threshold_value = self.threshold
+        if self.time_scope is None:
+            self.time_scope = self.temporal_deadline or self.temporal_focus
+        if self.oracle_scope is None:
+            self.oracle_scope = self.oracle_focus
+        if not self.resolution_exclusions:
+            self.resolution_exclusions = list(self.exclusions)
+        if self.polarity == "unknown" and self.canonical_predicate:
+            self.polarity = "negative" if str(self.canonical_predicate).startswith("not_") else "positive"
+        return self
+
+
+class CompiledPropositionSchema(BaseModel):
+    raw_market_id: str
+    canonical_subject: str
+    canonical_predicate: str
+    canonical_object: str | None = None
+    comparator: str | None = None
+    threshold_value: str | None = None
+    threshold_comparator: str | None = None
+    threshold: str | None = None
+    temporal_focus: str | None = None
+    temporal_deadline: str | None = None
+    time_scope: str | None = None
+    oracle_focus: str | None = None
+    oracle_scope: str | None = None
+    resolution_exclusions: list[str] = Field(default_factory=list)
+    cancellation_conditions: list[str] = Field(default_factory=list)
+    polarity: Literal["positive", "negative", "unknown"] = "unknown"
+    proposition_family: str
+    partition_hint: bool = False
+    semantic_tags: list[str] = Field(default_factory=list)
+    compiler_confidence: Probability
+
+    @field_validator("semantic_tags", "resolution_exclusions", "cancellation_conditions", mode="before")
+    @classmethod
+    def _normalize_semantic_tags(cls, value: Any) -> Any:
+        return _coerce_json_list(value)
+
+    @model_validator(mode="after")
+    def _sync_semantic_aliases(self) -> "CompiledPropositionSchema":
+        if self.threshold_comparator is None:
+            self.threshold_comparator = self.comparator
+        if self.comparator is None:
+            self.comparator = self.threshold_comparator
+        if self.threshold is None:
+            self.threshold = self.threshold_value
+        if self.threshold_value is None:
+            self.threshold_value = self.threshold
+        if self.time_scope is None:
+            self.time_scope = self.temporal_deadline or self.temporal_focus
+        if self.oracle_scope is None:
+            self.oracle_scope = self.oracle_focus
+        if self.polarity == "unknown" and self.canonical_predicate:
+            self.polarity = "negative" if str(self.canonical_predicate).startswith("not_") else "positive"
+        return self
+
+
+class CanonicalEventFrameSchema(BaseModel):
+    frame_id: str
+    frame_key: str
+    frame_type: str
+    title: str
+    domain: str
+    canonical_event_id: str | None = None
+    market_ids: list[str] = Field(default_factory=list)
+
+
+class LogicalRelationSchema(BaseModel):
+    from_market_id: str
+    to_market_id: str
+    relation_type: RelationType
+    proof_status: Literal["verified", "rejected", "needs_review"]
+    tradeable_relation: bool = False
+    confidence: Probability
+    created_by: str
+    evidence: dict[str, object] = Field(default_factory=dict)
+    frame_id: str | None = None
+
+
+class LogicalRelationSetSchema(BaseModel):
+    relation_set_id: str | None = None
+    set_key: str
+    member_market_ids: list[str] = Field(default_factory=list)
+    relation_type: RelationType
+    proof_status: Literal["verified", "rejected", "needs_review"]
+    tradeable_relation: bool = False
+    confidence: Probability
+    created_by: str
+    evidence: dict[str, object] = Field(default_factory=dict)
+    frame_id: str | None = None
+
+
+class TradeabilityAssessment(BaseModel):
+    tradeable_relation: bool = False
+    proof_status: Literal["verified", "rejected", "needs_review"] = "needs_review"
+    venue_constraints: list[str] = Field(default_factory=list)
+    reasoning: str | None = None
+    required_counterexample_types: list[str] = Field(default_factory=list)
+    assessment_version: str = "tradeability-v1"
+
+
+class CounterexampleRecord(BaseModel):
+    relation_id: str | None = None
+    review_id: str | None = None
+    relation_type: RelationType
+    set_key: str | None = None
+    scenario_description: str
+    resolution_a: Literal["YES", "NO", "AMBIGUOUS"]
+    resolution_b: Literal["YES", "NO", "AMBIGUOUS"]
+    why_different: str
+    source: str
+    status: Literal["none_found", "recorded", "dismissed"] = "recorded"
+    created_by: str
+    metadata: dict[str, object] = Field(default_factory=dict)
 
 
 class Leg(BaseModel):
@@ -115,25 +303,119 @@ class RiskScore(BaseModel):
     oracle_risk: Probability
     deadline_risk: Probability
     semantic_risk: Probability
+    execution_risk: Probability = 0.0
+    liquidity_risk: Probability = 0.0
+    cancellation_risk: Probability = 0.0
+    source_trust_risk: Probability = 0.0
     composite: Probability
+    policy_version: str = "risk-v2"
 
     @classmethod
-    def combine(cls, oracle: float, deadline: float, semantic: float) -> "RiskScore":
+    def combine(
+        cls,
+        oracle: float,
+        deadline: float,
+        semantic: float,
+        execution: float = 0.0,
+        liquidity: float = 0.0,
+        cancellation: float = 0.0,
+        source_trust: float = 0.0,
+        policy_version: str = "risk-v2",
+    ) -> "RiskScore":
+        components = [
+            oracle,
+            deadline,
+            semantic,
+            execution,
+            liquidity,
+            cancellation,
+            source_trust,
+        ]
         return cls(
             oracle_risk=oracle,
             deadline_risk=deadline,
             semantic_risk=semantic,
-            composite=round((oracle + deadline + semantic) / 3, 4),
+            execution_risk=execution,
+            liquidity_risk=liquidity,
+            cancellation_risk=cancellation,
+            source_trust_risk=source_trust,
+            composite=round(sum(components) / len(components), 4),
+            policy_version=policy_version,
         )
 
 
 class SimulationResult(BaseModel):
     candidate_id: str
+    displayed_edge: float = 0.0
+    executable_edge: float = 0.0
     simulated_pnl: float       # post-friction estimate
     friction_bps: NonNegativeBps
-    fill_probability: Probability    # 1.0 in stub (assumes full fill)
-    is_executable: bool        # True if simulated_pnl > 0
-    note: str                  # "stub — no order book model" in Slice 1
+    fill_probability: Probability    # heuristic execution probability estimate
+    is_executable: bool        # True if simulated_pnl > 0 after execution drag
+    note: str                  # short explanation of the execution model used
+    estimated_slippage_bps: NonNegativeBps = 0
+    estimated_slippage_cost: float = 0.0
+    spread_cross_cost: float = 0.0
+    stale_quote_cost: float = 0.0
+    partial_fill_cost: float = 0.0
+    non_execution_cost: float = 0.0
+    execution_quality: Literal["high", "medium", "low"] = "medium"
+    risk_flags: list[str] = Field(default_factory=list)
+    venue_breakdown: dict[str, object] = Field(default_factory=dict)
+    model_version: str = "heuristic-v3"
+
+
+class DecisionGate(BaseModel):
+    name: str
+    status: Literal["pass", "watchlist", "reject", "info"]
+    observed: str
+    threshold: str | None = None
+    detail: str | None = None
+
+
+class CourtAssessment(BaseModel):
+    decision: CourtDecision
+    simulated_pnl: float
+    fill_probability: Probability
+    composite_risk: Probability | None = None
+    reasons: list[str]
+    opportunity_type: OpportunityType | None = None
+    relation_type: RelationType | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    gates: list[DecisionGate] = Field(default_factory=list)
+    policy_version: str = "court-v2"
+
+
+class RelationEvidenceResponse(BaseModel):
+    from_market_id: str
+    to_market_id: str
+    relation_type: RelationType
+    is_confirmed: bool = True
+    confidence: Probability
+    created_by: str
+    evidence_version: str = "relation-analysis-v1"
+    abstention_reason: str | None = None
+    structural_relation_type: str | None = None
+    semantic_relation_type: str | None = None
+    semantic_confidence: Probability | None = None
+    semantic_reasoning: str | None = None
+    comparison_axes: list[str] = Field(default_factory=list)
+    breaking_scenarios: list[Counterexample] = Field(default_factory=list)
+    oracle_alignment: str | None = None
+    deadline_alignment: str | None = None
+    source_alignment: str | None = None
+    ambiguity_terms: list[str] = Field(default_factory=list)
+    relation_signals: dict[str, object] = Field(default_factory=dict)
+    identity_provenance: dict[str, object] | None = None
+    identity_status: IdentityResolutionStatus = IdentityResolutionStatus.UNRESOLVED
+    identity_confidence: Probability | None = None
+    identity_version: str = "identity-v2"
+    identity_blocking_reason: str | None = None
+    proof_status: str = "verified"
+    tradeable_relation: bool = False
+    frame_id: str | None = None
+    set_key: str | None = None
+    member_market_ids: list[str] = Field(default_factory=list)
 
 
 class ResolutionType(str, Enum):
@@ -141,6 +423,15 @@ class ResolutionType(str, Enum):
     IDENTITY_ERROR = "IDENTITY_ERROR"       # relation was wrongly detected
     ORACLE_DIVERGENCE = "ORACLE_DIVERGENCE" # oracle resolved unexpectedly
     CANCELLED = "CANCELLED"                 # market voided / no contest
+
+
+class AutopsyLabel(str, Enum):
+    FALSE_EQUIVALENCE = "false_equivalence"
+    ORACLE_MISMATCH = "oracle_mismatch"
+    DEADLINE_MISMATCH = "deadline_mismatch"
+    AMBIGUITY_MISS = "ambiguity_miss"
+    EXECUTION_MISS = "execution_miss"
+    STALE_QUOTE_MISS = "stale_quote_miss"
 
 
 # --- API response schemas ---
@@ -154,13 +445,27 @@ class CandidateSummary(BaseModel):
     created_at: datetime
 
 
+class DecisionSnapshot(BaseModel):
+    candidate_id: str
+    run_id: str | None = None
+    risk_score: RiskScore | None = None
+    relation_evidence: RelationEvidenceResponse | None = None
+    simulation_result: SimulationResult | None = None
+    court_assessment: CourtAssessment | None = None
+    snapshot_version: str = "decision-snapshot-v1"
+    evaluated_at: datetime
+
+
 class CandidateDetail(BaseModel):
     id: str
     opportunity_type: OpportunityType
     market_ids: list[str]
     payoff_matrix: PayoffMatrix
     risk_score: RiskScore | None
+    decision_snapshot: DecisionSnapshot | None = None
     simulation_result: SimulationResult | None
+    court_assessment: CourtAssessment | None = None
+    relation_evidence: RelationEvidenceResponse | None = None
     court_decision: CourtDecision
     created_at: datetime
 
@@ -172,12 +477,15 @@ class MarketSummary(BaseModel):
     outcome_prices: list[float]
     group_id: str | None
     deadline: datetime
+    deadline_precision: Literal["exact", "inferred"] = "exact"
+    data_provenance: Literal["persisted"] = "persisted"
     is_closed: bool
 
 class MarketDetail(MarketSummary):
     description: str
     resolution_criteria: str
     resolution_source: str | None
+    deadline_source: str | None = None
     contract: ContractSchema | None
 
 
@@ -189,11 +497,62 @@ class AuditEventResponse(BaseModel):
     created_at: datetime
 
 
-class RunSummary(BaseModel):
-    markets_ingested: int
-    contracts_compiled: int
-    events_resolved: int
-    relations_detected: int
-    candidates_found: int
-    candidates_watchlisted: int
-    errors: list[str]
+class PositionSummary(BaseModel):
+    id: str
+    candidate_id: str
+    status: str
+    opened_at: datetime
+    closed_at: datetime | None
+    actual_pnl: float | None
+
+
+class PositionDetail(PositionSummary):
+    legs: list[Leg]
+
+
+class AutopsyRecordResponse(BaseModel):
+    id: str
+    candidate_id: str
+    position_id: str | None
+    actual_resolution: dict[str, str]
+    resolution_type: ResolutionType
+    identity_error: bool
+    labels: list[AutopsyLabel] = Field(default_factory=list)
+    created_at: datetime
+
+
+class SettlementRequest(BaseModel):
+    actual_pnl: float
+    actual_resolution: dict[str, str]
+    resolution_type: ResolutionType
+    labels: list[AutopsyLabel] = Field(default_factory=list)
+
+    @field_validator("actual_pnl")
+    @classmethod
+    def validate_actual_pnl(cls, value: float) -> float:
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError("actual_pnl must be finite")
+        if value < -1.0 or value > 1.0:
+            raise ValueError("actual_pnl must be between -1.0 and 1.0")
+        return value
+
+    @field_validator("actual_resolution")
+    @classmethod
+    def validate_actual_resolution_values(cls, value: dict[str, str]) -> dict[str, str]:
+        allowed = {"YES", "NO", "N/A", "AMBIGUOUS", "CANCELLED"}
+        cleaned: dict[str, str] = {}
+        for market_id, resolution in value.items():
+            market_key = market_id.strip()
+            normalized = resolution.strip().upper()
+            if not market_key:
+                raise ValueError("actual_resolution keys must be non-empty")
+            if normalized not in allowed:
+                raise ValueError(f"unsupported actual_resolution value: {resolution}")
+            cleaned[market_key] = normalized
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_non_empty_resolution(self) -> "SettlementRequest":
+        if not self.actual_resolution:
+            raise ValueError("actual_resolution must not be empty")
+        return self

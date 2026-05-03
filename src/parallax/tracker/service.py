@@ -2,8 +2,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from parallax.candidates.repository import CandidateRepository
+from parallax.config import settings
 from parallax.db.models import OpportunityCandidate, PaperPosition
-from parallax.shared.schemas import PayoffMatrix
+from parallax.shared.schemas import CourtDecision, PayoffMatrix
 
 
 class TrackerService:
@@ -11,9 +13,12 @@ class TrackerService:
 
     def __init__(self, session: Session) -> None:
         self._session = session
+        self._candidate_repo = CandidateRepository(session)
 
     def open_position(self, candidate_id: str) -> PaperPosition | None:
         """Open a paper position for a candidate. Returns None if already open."""
+        if settings.runtime_global_pause or settings.runtime_degraded_read_only:
+            return None
         existing = (
             self._session.query(PaperPosition)
             .filter_by(candidate_id=uuid.UUID(candidate_id), status="OPEN")
@@ -27,6 +32,8 @@ class TrackerService:
         )
         if candidate is None:
             raise ValueError(f"Candidate {candidate_id} not found")
+        if candidate.court_decision != CourtDecision.APPROVED.value:
+            return None
 
         matrix = PayoffMatrix.model_validate(candidate.payoff_matrix)
         position = PaperPosition(
@@ -36,6 +43,7 @@ class TrackerService:
             legs_json=[leg.model_dump() for leg in matrix.legs],
         )
         self._session.add(position)
+        candidate.court_decision = CourtDecision.PAPER_TRADE.value
         self._session.flush()
         return position
 
@@ -52,6 +60,7 @@ class TrackerService:
         position.status = "CLOSED"
         position.closed_at = datetime.now(timezone.utc)
         position.actual_pnl = actual_pnl
+        self._candidate_repo.close(str(position.candidate_id))
         self._session.flush()
         return True
 
@@ -61,3 +70,12 @@ class TrackerService:
             .filter_by(status="OPEN")
             .all()
         )
+
+    def list_positions(self, status: str | None = None, limit: int = 100) -> list[PaperPosition]:
+        query = self._session.query(PaperPosition).order_by(PaperPosition.opened_at.desc())
+        if status is not None:
+            query = query.filter_by(status=status)
+        return query.limit(limit).all()
+
+    def get_position(self, position_id: str) -> PaperPosition | None:
+        return self._session.get(PaperPosition, uuid.UUID(position_id))

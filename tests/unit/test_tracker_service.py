@@ -1,8 +1,9 @@
 import uuid
 from unittest.mock import MagicMock
+from parallax.config import settings
 from parallax.db.models import OpportunityCandidate, PaperPosition
 from parallax.tracker.service import TrackerService
-from parallax.shared.schemas import Leg, OpportunityType, PayoffMatrix, Scenario
+from parallax.shared.schemas import CourtDecision, Leg, OpportunityType, PayoffMatrix, Scenario
 
 
 def _payoff_matrix() -> PayoffMatrix:
@@ -28,7 +29,7 @@ def _candidate(candidate_id: uuid.UUID) -> OpportunityCandidate:
         worst_case_payoff=0.05,
         friction_bps=10,
         risk_scores={},
-        court_decision="PENDING",
+        court_decision=CourtDecision.APPROVED.value,
     )
 
 
@@ -46,6 +47,7 @@ class TestTrackerService:
         assert position is not None
         assert position.status == "OPEN"
         assert position.candidate_id == candidate_id
+        assert session.get.return_value.court_decision == CourtDecision.PAPER_TRADE.value
         session.add.assert_called_once_with(position)
         session.flush.assert_called_once()
 
@@ -65,16 +67,62 @@ class TestTrackerService:
         assert result is None
         session.add.assert_not_called()
 
+    def test_open_position_returns_none_when_candidate_not_approved(self):
+        session = MagicMock()
+        candidate_id = uuid.uuid4()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+        candidate = _candidate(candidate_id)
+        candidate.court_decision = CourtDecision.WATCHLIST.value
+        session.get.return_value = candidate
+
+        svc = TrackerService(session)
+        result = svc.open_position(str(candidate_id))
+
+        assert result is None
+        session.add.assert_not_called()
+
+    def test_open_position_returns_none_when_global_pause_active(self):
+        session = MagicMock()
+        candidate_id = uuid.uuid4()
+        original_pause = settings.runtime_global_pause
+        try:
+            settings.runtime_global_pause = True
+            svc = TrackerService(session)
+            result = svc.open_position(str(candidate_id))
+        finally:
+            settings.runtime_global_pause = original_pause
+
+        assert result is None
+        session.query.assert_not_called()
+        session.get.assert_not_called()
+
+    def test_open_position_returns_none_when_degraded_read_only_active(self):
+        session = MagicMock()
+        candidate_id = uuid.uuid4()
+        original_read_only = settings.runtime_degraded_read_only
+        try:
+            settings.runtime_degraded_read_only = True
+            svc = TrackerService(session)
+            result = svc.open_position(str(candidate_id))
+        finally:
+            settings.runtime_degraded_read_only = original_read_only
+
+        assert result is None
+        session.query.assert_not_called()
+        session.get.assert_not_called()
+
     def test_close_position_updates_record(self):
         session = MagicMock()
         position_id = uuid.uuid4()
+        candidate_id = uuid.uuid4()
         position = PaperPosition(
             id=position_id,
-            candidate_id=uuid.uuid4(),
+            candidate_id=candidate_id,
             status="OPEN",
             legs_json=[],
         )
-        session.get.return_value = position
+        candidate = _candidate(candidate_id)
+        session.get.side_effect = [position, candidate]
         session.flush = MagicMock()
 
         svc = TrackerService(session)
@@ -84,6 +132,7 @@ class TestTrackerService:
         assert position.status == "CLOSED"
         assert position.actual_pnl == 0.05
         assert position.closed_at is not None
+        assert session.get.call_count >= 1
 
     def test_close_position_returns_false_when_not_found(self):
         session = MagicMock()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
-from parallax.api.deps import get_session
+from parallax.api.deps import get_read_session, require_read_access
 from parallax.audit.repository import AuditRepository
 from parallax.shared.schemas import AuditEventResponse
 
@@ -11,7 +11,8 @@ router = APIRouter(tags=["audit"])
 @router.get("/audit", response_model=list[AuditEventResponse])
 def list_audit_events(
     limit: int = Query(default=100, ge=1, le=1000),
-    session: Session = Depends(get_session),
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
 ) -> list[AuditEventResponse]:
     repo = AuditRepository(session)
     rows = repo.list_recent(limit=limit)
@@ -31,7 +32,8 @@ def list_audit_events(
 def list_audit_for_entity(
     entity_type: str,
     entity_id: str,
-    session: Session = Depends(get_session),
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
 ) -> list[AuditEventResponse]:
     repo = AuditRepository(session)
     rows = repo.list_for_entity(entity_type, entity_id)

@@ -1,89 +1,90 @@
 from __future__ import annotations
 
-import pytest
-
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
+
+import httpx
+import pytest
 
 from parallax.ingestion.kalshi_adapter import KalshiAdapter
 
 
-def _raw_market(ticker="TRUMP-2026", close_time="2026-01-20T00:00:00Z",
-                yes_bid=0.60, yes_ask=0.62, event_ticker="TRUMP-PRES",
-                title="Will Trump be president in 2026?") -> dict:
+def _event(event_ticker: str = "KXNEWPOPE-70") -> dict:
     return {
-        "ticker": ticker,
-        "title": title,
-        "close_time": close_time,
-        "status": "open",
-        "yes_bid": yes_bid,
-        "yes_ask": yes_ask,
-        "no_bid": 1 - yes_ask,
-        "no_ask": 1 - yes_bid,
         "event_ticker": event_ticker,
-        "category": "Politics",
-        "rules_primary": "Resolves YES if Trump is president on Jan 20 2026.",
+        "category": "World",
+        "sub_title": "Before 2070",
+        "title": "Who will the next Pope be?",
     }
 
 
-class TestKalshiAdapter:
-    def test_platform_name(self):
-        adapter = KalshiAdapter(api_key="test")
-        assert adapter.platform_name == "kalshi"
+def _market(ticker: str = "KXNEWPOPE-70-MZUP") -> dict:
+    return {
+        "ticker": ticker,
+        "event_ticker": "KXNEWPOPE-70",
+        "market_type": "binary",
+        "status": "active",
+        "expiration_time": "2070-01-01T15:00:00Z",
+        "rules_primary": "If Matteo Zuppi becomes Pope, market resolves Yes.",
+        "yes_sub_title": "Matteo Zuppi",
+        "yes_bid_dollars": "0.0400",
+        "yes_ask_dollars": "0.0600",
+    }
 
-    def test_parse_valid_market(self):
-        adapter = KalshiAdapter(api_key="test")
-        raw = _raw_market()
-        result = adapter._parse(raw)
-        assert result is not None
-        assert result.platform == "kalshi"
-        assert result.market_id == "TRUMP-2026"
-        assert result.group_id == "TRUMP-PRES"
-        assert abs(result.outcome_prices[0] - 0.61) < 0.01  # mid-price
-        assert result.is_closed is False
 
-    def test_parse_closed_market_returns_none(self):
-        adapter = KalshiAdapter(api_key="test")
-        raw = _raw_market()
-        raw["status"] = "finalized"
-        result = adapter._parse(raw)
-        assert result is None
+def test_platform_name():
+    assert KalshiAdapter().platform_name == "kalshi"
 
-    def test_parse_missing_close_time_returns_none(self):
-        adapter = KalshiAdapter(api_key="test")
-        raw = _raw_market()
-        del raw["close_time"]
-        result = adapter._parse(raw)
-        assert result is None
 
-    @pytest.mark.anyio
-    async def test_fetch_markets_sends_auth_header(self):
-        adapter = KalshiAdapter(api_key="test-key")
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = {"markets": [_raw_market()], "cursor": ""}
-        mock_resp.raise_for_status = MagicMock()
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        adapter._client = mock_client
+def test_parse_market_maps_supported_payload():
+    result = KalshiAdapter()._parse_market(_event(), _market())
+    assert result is not None
+    assert result.platform == "kalshi"
+    assert result.market_id == "KXNEWPOPE-70-MZUP"
+    assert result.group_id == "KXNEWPOPE-70"
+    assert result.outcome_prices == [0.05, 0.95]
+    assert result.deadline == datetime(2070, 1, 1, 15, 0, tzinfo=timezone.utc)
 
-        results = await adapter.fetch_markets()
 
-        call_kwargs = mock_client.get.call_args.kwargs
-        assert call_kwargs["headers"]["Authorization"] == "Bearer test-key"
-        assert len(results) == 1
+def test_parse_market_filters_multivariate_products():
+    raw = _market()
+    raw["mve_collection_ticker"] = "KXMVE-123"
+    assert KalshiAdapter()._parse_market(_event(), raw) is None
 
-    @pytest.mark.anyio
-    async def test_fetch_markets_paginates_via_cursor(self):
-        adapter = KalshiAdapter(api_key="test-key")
-        page1 = MagicMock()
-        page1.json.return_value = {"markets": [_raw_market("M1")], "cursor": "next-cursor"}
-        page1.raise_for_status = MagicMock()
-        page2 = MagicMock()
-        page2.json.return_value = {"markets": [_raw_market("M2")], "cursor": ""}
-        page2.raise_for_status = MagicMock()
-        mock_client = MagicMock()
-        mock_client.get = AsyncMock(side_effect=[page1, page2])
-        adapter._client = mock_client
 
-        results = await adapter.fetch_markets()
-        assert len(results) == 2
-        assert mock_client.get.call_count == 2
+@pytest.mark.anyio
+async def test_fetch_markets_reads_event_detail_payloads():
+    list_response = MagicMock()
+    list_response.raise_for_status = MagicMock()
+    list_response.json.return_value = {"events": [_event()], "cursor": ""}
+
+    detail_response = MagicMock()
+    detail_response.raise_for_status = MagicMock()
+    detail_response.json.return_value = {"event": _event(), "markets": [_market()]}
+
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[list_response, detail_response])
+
+    results = await KalshiAdapter(max_events=5, http_client=client).fetch_markets()
+
+    assert [market.market_id for market in results] == ["KXNEWPOPE-70-MZUP"]
+
+
+@pytest.mark.anyio
+async def test_fetch_markets_retries_transient_connect_error():
+    list_response = MagicMock()
+    list_response.raise_for_status = MagicMock()
+    list_response.json.return_value = {"events": [_event()], "cursor": ""}
+
+    detail_response = MagicMock()
+    detail_response.raise_for_status = MagicMock()
+    detail_response.json.return_value = {"event": _event(), "markets": [_market()]}
+
+    request = httpx.Request("GET", "https://api.elections.kalshi.com/trade-api/v2/events")
+    client = MagicMock()
+    client.get = AsyncMock(side_effect=[httpx.ConnectError("dns", request=request), list_response, detail_response])
+
+    results = await KalshiAdapter(max_events=5, http_client=client).fetch_markets()
+
+    assert [market.market_id for market in results] == ["KXNEWPOPE-70-MZUP"]
+    assert client.get.await_count == 3

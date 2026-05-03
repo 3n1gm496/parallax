@@ -20,6 +20,17 @@ a structured contract definition with:
   identifying subtle semantic differences
 - compiler_confidence: your calibrated confidence (0.0–1.0) that the contract is
   unambiguous and complete, where 1.0 means fully unambiguous
+- canonical_subject: the main entity or proposition subject
+- canonical_predicate: normalized predicate such as binary_occurrence, selection, before_event
+- canonical_object: normalized object or comparator target if applicable
+- comparator: normalized comparator token if present
+- threshold_value: literal numeric or named threshold if present
+- temporal_focus: normalized temporal operator if present
+- temporal_deadline: deadline or terminal date if explicit in text
+- oracle_focus: normalized resolution authority if explicit
+- proposition_family: abstract template family for clustering similar propositions
+- partition_hint: true only if this market appears to belong to an exclusive choice set
+- semantic_tags: short normalized tags such as temporal, selection, conditional
 
 Be precise. If criteria are vague, reflect that with low confidence and flag the
 ambiguous terms. Do not invent resolution rules not implied by the text."""

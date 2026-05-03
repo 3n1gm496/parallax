@@ -1,30 +1,76 @@
 from __future__ import annotations
+import hashlib
 import logging
+import uuid
 from contextlib import AbstractContextManager
+from datetime import datetime, timezone
 from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from parallax.audit.service import AuditService
+from parallax.candidates.repository import CandidateRepository
 from parallax.compiler.anthropic_provider import AnthropicCompilerProvider
 from parallax.compiler.service import CompilerService
 from parallax.config import settings
 from parallax.court.service import CourtService
-from parallax.divergence.candidate_repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
+from parallax.db.models import RunProofRecord
 from parallax.graph.postgres_repository import PostgresGraphRepository
+from parallax.identity.service import IdentityService
+from parallax.ingestion.adapter import PlatformAdapter
 from parallax.ingestion.ingestor import IngestorService
 from parallax.ingestion.kalshi_adapter import KalshiAdapter
 from parallax.ingestion.market_repository import MarketRepository
+from parallax.ops.runtime import build_readiness_payload
+from parallax.ops.schemas import RunSummary
 from parallax.ingestion.polymarket_adapter import PolymarketAdapter
-from parallax.detection.stage2 import Stage2LLMDetector
-from parallax.prover.service import ProverService
-from parallax.shared.schemas import RunSummary
-from parallax.simulator.service import SimulatorService
+from parallax.detection.semantic import SemanticRelationAnalyzer
+from parallax.prover.service import RelationAnalysisService
+from parallax.tracker.service import TrackerService
 
 log = logging.getLogger(__name__)
 
 SessionFactory = Callable[[], AbstractContextManager[Session]]
+
+
+def _anthropic_available() -> bool:
+    api_key = settings.anthropic_api_key.strip()
+    return bool(api_key and api_key.lower() != "placeholder")
+
+
+def _config_fingerprint() -> str:
+    relevant = {
+        "polymarket_max_events_per_poll": settings.polymarket_max_events_per_poll,
+        "kalshi_max_events_per_poll": settings.kalshi_max_events_per_poll,
+        "pipeline_max_open_markets": settings.pipeline_max_open_markets,
+        "friction_bps": settings.friction_bps,
+        "compiler_min_confidence": settings.compiler_min_confidence,
+        "semantic_min_relation_confidence": settings.semantic_min_relation_confidence,
+        "court_max_composite_risk": settings.court_max_composite_risk,
+        "court_min_simulated_pnl": settings.court_min_simulated_pnl,
+        "court_min_fill_probability": settings.court_min_fill_probability,
+    }
+    payload = "|".join(f"{key}={value}" for key, value in sorted(relevant.items()))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _provider_fingerprints() -> dict[str, str]:
+    return {
+        "polymarket": hashlib.sha256(
+            f"native:{settings.polymarket_max_events_per_poll}".encode("utf-8")
+        ).hexdigest()[:12],
+        "kalshi": hashlib.sha256(
+            f"native:{settings.kalshi_max_events_per_poll}".encode("utf-8")
+        ).hexdigest()[:12],
+    }
+
+
+def build_ingestion_adapters() -> list[PlatformAdapter]:
+    return [
+        PolymarketAdapter(max_events=settings.polymarket_max_events_per_poll),
+        KalshiAdapter(max_events=settings.kalshi_max_events_per_poll),
+    ]
 
 
 class PipelineRunner:
@@ -34,21 +80,64 @@ class PipelineRunner:
         self._session_factory = session_factory
 
     async def run_once(self) -> RunSummary:
+        run_id = str(uuid.uuid4())
+        config_fingerprint = _config_fingerprint()
+        provider_fingerprints = _provider_fingerprints()
+        started_at = datetime.now(timezone.utc)
         errors: list[str] = []
         markets_ingested = 0
+        market_counts_by_platform: dict[str, int] = {}
         contracts_compiled = 0
+        events_resolved = 0
         relations_detected = 0
         candidates_found = 0
         candidates_watchlisted = 0
+        positions_opened = 0
+        positions_settled = 0
+        run_status = "completed"
 
         try:
-            adapters = [PolymarketAdapter(max_events=settings.polymarket_max_events_per_poll)]
-            if settings.kalshi_api_key:
-                adapters.append(KalshiAdapter(api_key=settings.kalshi_api_key))
+            with self._session_factory() as session:
+                audit_svc = AuditService(session)
+                audit_svc.record(
+                    "pipeline.run.started",
+                    "pipeline",
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "config_fingerprint": config_fingerprint,
+                        "provider_fingerprints": provider_fingerprints,
+                        "started_at": started_at.isoformat(),
+                    },
+                )
+                self._upsert_run_proof(
+                    session,
+                    run_id=run_id,
+                    run_status="running",
+                    started_at=started_at,
+                    completed_at=started_at,
+                    config_fingerprint=config_fingerprint,
+                    provider_fingerprints=provider_fingerprints,
+                    readiness={},
+                    markets_ingested=0,
+                    market_counts_by_platform={},
+                    contracts_compiled=0,
+                    events_resolved=0,
+                    relations_detected=0,
+                    candidates_found=0,
+                    candidates_watchlisted=0,
+                    positions_opened=0,
+                    positions_settled=0,
+                    errors=[],
+                )
+                session.commit()
+
+            adapters = build_ingestion_adapters()
             ingestor = IngestorService(adapters, self._session_factory)
             try:
                 counts = await ingestor.run_once()
                 markets_ingested = sum(counts.values())
+                market_counts_by_platform = counts
             except Exception as exc:
                 log.warning("pipeline: ingestion failed: %s", exc)
                 errors.append(f"ingestion:{exc}")
@@ -59,64 +148,240 @@ class PipelineRunner:
                 audit_svc = AuditService(session)
 
                 open_markets = market_repo.list_open()
+                if settings.pipeline_max_open_markets > 0:
+                    open_markets = open_markets[: settings.pipeline_max_open_markets]
                 log.info("pipeline: %d open markets loaded", len(open_markets))
 
-                provider = AnthropicCompilerProvider()
-                compiler_svc = CompilerService(session, provider)
-                for market in open_markets:
-                    try:
-                        await compiler_svc.compile(market)
-                        contracts_compiled += 1
-                    except Exception as exc:
-                        log.warning("pipeline: compile failed for %s: %s", market.id, exc)
-                        errors.append(f"compile:{market.id}:{exc}")
+                llm_enabled = _anthropic_available()
+                compiler_provider = AnthropicCompilerProvider() if llm_enabled else None
+                if compiler_provider is not None:
+                    compiler_svc = CompilerService(session, compiler_provider)
+                    for market in open_markets:
+                        try:
+                            with session.begin_nested():
+                                await compiler_svc.compile(market)
+                            contracts_compiled += 1
+                        except Exception as exc:
+                            log.warning("pipeline: compile failed for %s: %s", market.id, exc)
+                            errors.append(f"compile:{market.id}:{exc}")
+                else:
+                    log.info("pipeline: no semantic compiler available, skipping compile and semantic analysis")
                 audit_svc.record(
                     "pipeline.compiler.complete",
                     "pipeline",
-                    "global",
-                    {"compiled": contracts_compiled},
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "config_fingerprint": config_fingerprint,
+                        "compiled": contracts_compiled,
+                        "llm_enabled": llm_enabled,
+                        "compiler_mode": "anthropic" if llm_enabled else "disabled",
+                    },
                 )
+                session.commit()
 
-                import anthropic as anthropic_sdk
-                stage2 = Stage2LLMDetector(anthropic_sdk.AsyncAnthropic(api_key=settings.anthropic_api_key))
-                prover = ProverService(session, graph_repo, stage2_classifier=stage2)
-                relations_detected = await prover.run(open_markets)
-                audit_svc.record("pipeline.prover.complete", "pipeline", "global", {"relations": relations_detected})
+                identity_svc = IdentityService(session)
+                events_resolved = identity_svc.resolve_all_ungrouped()
+                audit_svc.record(
+                    "pipeline.identity.complete",
+                    "pipeline",
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "config_fingerprint": config_fingerprint,
+                        "events_resolved": events_resolved,
+                    },
+                )
+                session.commit()
+
+                semantic_analyzer = None
+                if llm_enabled:
+                    import anthropic as anthropic_sdk
+                    semantic_analyzer = SemanticRelationAnalyzer(
+                        anthropic_sdk.AsyncAnthropic(api_key=settings.anthropic_api_key)
+                    )
+                relation_service = RelationAnalysisService(session, graph_repo, semantic_analyzer=semantic_analyzer)
+                relations_detected = await relation_service.run(open_markets)
+                audit_svc.record(
+                    "pipeline.prover.complete",
+                    "pipeline",
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "config_fingerprint": config_fingerprint,
+                        "relations": relations_detected,
+                    },
+                )
+                session.commit()
 
                 divergence_svc = DivergenceService(session, graph_repo, friction_bps=settings.friction_bps)
                 candidates_found = divergence_svc.scan(open_markets)
-                audit_svc.record("pipeline.divergence.complete", "pipeline", "global", {"candidates": candidates_found})
+                audit_svc.record(
+                    "pipeline.divergence.complete",
+                    "pipeline",
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "config_fingerprint": config_fingerprint,
+                        "candidates": candidates_found,
+                    },
+                )
+                session.commit()
 
                 candidate_repo = CandidateRepository(session)
                 court_svc = CourtService(session)
-                simulator_svc = SimulatorService(session)
+                tracker_svc = TrackerService(session)
 
                 for candidate in candidate_repo.list_open():
                     cid = str(candidate.id)
                     try:
-                        decision = court_svc.evaluate(cid)
-                        simulator_svc.simulate(cid)
-                        if decision.value == "WATCHLIST":
-                            candidates_watchlisted += 1
+                        with session.begin_nested():
+                            decision = court_svc.evaluate(cid, run_id=run_id)
+                            snapshot = candidate_repo.snapshot_to_schema(candidate_repo.get_decision_snapshot(cid))
+                            simulation = snapshot.simulation_result if snapshot is not None else None
+                            audit_svc.record(
+                                "pipeline.candidate.evaluated",
+                                "candidate",
+                                cid,
+                                {
+                                    "decision": decision.value,
+                                    "simulated_pnl": simulation.simulated_pnl if simulation is not None else None,
+                                    "is_executable": simulation.is_executable if simulation is not None else None,
+                                    "run_id": run_id,
+                                },
+                            )
+                            if decision.value == "APPROVED" and simulation is not None and simulation.is_executable:
+                                position = tracker_svc.open_position(cid)
+                                if position is not None:
+                                    positions_opened += 1
+                                    audit_svc.record(
+                                        "pipeline.position.opened",
+                                        "position",
+                                        str(position.id),
+                                        {"candidate_id": cid, "run_id": run_id},
+                                    )
+                            if decision.value == "WATCHLIST":
+                                candidates_watchlisted += 1
                     except Exception as exc:
                         log.warning("pipeline: candidate %s failed: %s", cid, exc)
                         errors.append(f"candidate:{cid}:{exc}")
+                session.commit()
 
+                audit_svc.record(
+                    "pipeline.run.completed",
+                    "pipeline",
+                    run_id,
+                    {
+                        "run_id": run_id,
+                        "run_status": run_status,
+                        "started_at": started_at.isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "config_fingerprint": config_fingerprint,
+                        "provider_fingerprints": provider_fingerprints,
+                        "markets_ingested": markets_ingested,
+                        "market_counts_by_platform": market_counts_by_platform,
+                        "contracts_compiled": contracts_compiled,
+                        "events_resolved": events_resolved,
+                        "relations_detected": relations_detected,
+                        "candidates_found": candidates_found,
+                        "candidates_watchlisted": candidates_watchlisted,
+                        "positions_opened": positions_opened,
+                        "positions_settled": positions_settled,
+                        "errors": errors,
+                    },
+                )
+                readiness = build_readiness_payload(session)
+                self._upsert_run_proof(
+                    session,
+                    run_id=run_id,
+                    run_status=run_status,
+                    started_at=started_at,
+                    completed_at=datetime.now(timezone.utc),
+                    config_fingerprint=config_fingerprint,
+                    provider_fingerprints=provider_fingerprints,
+                    readiness=readiness.model_dump(mode="json"),
+                    markets_ingested=markets_ingested,
+                    market_counts_by_platform=market_counts_by_platform,
+                    contracts_compiled=contracts_compiled,
+                    events_resolved=events_resolved,
+                    relations_detected=relations_detected,
+                    candidates_found=candidates_found,
+                    candidates_watchlisted=candidates_watchlisted,
+                    positions_opened=positions_opened,
+                    positions_settled=positions_settled,
+                    errors=errors,
+                )
                 session.commit()
 
         except Exception as exc:
             log.error("pipeline: run failed: %s", exc)
             errors.append(str(exc))
+            run_status = "failed"
 
         return RunSummary(
+            run_id=run_id,
+            run_status=run_status,
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
             markets_ingested=markets_ingested,
+            market_counts_by_platform=market_counts_by_platform,
             contracts_compiled=contracts_compiled,
-            events_resolved=0,
+            events_resolved=events_resolved,
             relations_detected=relations_detected,
             candidates_found=candidates_found,
             candidates_watchlisted=candidates_watchlisted,
+            positions_opened=positions_opened,
+            positions_settled=positions_settled,
+            config_fingerprint=config_fingerprint,
+            provider_fingerprints=provider_fingerprints,
             errors=errors,
         )
+
+    @staticmethod
+    def _upsert_run_proof(
+        session: Session,
+        *,
+        run_id: str,
+        run_status: str,
+        started_at: datetime,
+        completed_at: datetime,
+        config_fingerprint: str,
+        provider_fingerprints: dict[str, str],
+        readiness: dict,
+        markets_ingested: int,
+        market_counts_by_platform: dict[str, int],
+        contracts_compiled: int,
+        events_resolved: int,
+        relations_detected: int,
+        candidates_found: int,
+        candidates_watchlisted: int,
+        positions_opened: int,
+        positions_settled: int,
+        errors: list[str],
+    ) -> None:
+        row = session.get(RunProofRecord, run_id)
+        if row is None:
+            row = RunProofRecord(run_id=run_id)
+            session.add(row)
+        row.run_status = run_status
+        row.started_at = started_at
+        row.completed_at = completed_at
+        row.config_fingerprint = config_fingerprint
+        row.provider_fingerprints = provider_fingerprints
+        row.readiness_checks = readiness.get("checks", {})
+        row.control_state = readiness.get("controls", {})
+        row.markets_ingested = markets_ingested
+        row.market_counts_by_platform = market_counts_by_platform
+        row.contracts_compiled = contracts_compiled
+        row.events_resolved = events_resolved
+        row.relations_detected = relations_detected
+        row.candidates_found = candidates_found
+        row.candidates_watchlisted = candidates_watchlisted
+        row.positions_opened = positions_opened
+        row.positions_settled = positions_settled
+        row.fatal_errors = []
+        row.non_fatal_errors = errors
+        session.flush()
 
 
 if __name__ == "__main__":

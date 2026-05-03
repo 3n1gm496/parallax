@@ -25,7 +25,9 @@ class AuditEvent(Base):
     entity_id: Mapped[str] = mapped_column(String(255))
     payload: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(_TZ, index=True, default=_now)
-    # No update / delete allowed — enforced at repository level
+    __table_args__ = (
+        Index("ix_audit_events_entity_lookup", "entity_type", "entity_id", "created_at"),
+    )
 
 
 class RawMarket(Base):
@@ -46,6 +48,10 @@ class RawMarket(Base):
     raw_payload: Mapped[dict] = mapped_column(JSON)
     ingested_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
     updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+    __table_args__ = (
+        Index("ix_raw_markets_platform_group_deadline", "platform", "group_id", "deadline"),
+        Index("ix_raw_markets_platform_updated_at", "platform", "updated_at"),
+    )
 
 
 class CompiledContract(Base):
@@ -54,6 +60,15 @@ class CompiledContract(Base):
     raw_market_id: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), index=True)
     contract_json: Mapped[dict] = mapped_column(JSON)
     compiler_confidence: Mapped[float] = mapped_column(Float)
+    compiler_version: Mapped[str] = mapped_column(String(100))
+    compiled_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class CompiledProposition(Base):
+    __tablename__ = "compiled_propositions"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_market_id: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), unique=True, index=True)
+    proposition_json: Mapped[dict] = mapped_column(JSON)
     compiler_version: Mapped[str] = mapped_column(String(100))
     compiled_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
 
@@ -69,6 +84,25 @@ class CanonicalEvent(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
     created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
     updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+    __table_args__ = (
+        Index("ix_canonical_events_domain_status", "domain", "status"),
+    )
+
+
+class CanonicalEventFrame(Base):
+    __tablename__ = "canonical_event_frames"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    frame_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    frame_type: Mapped[str] = mapped_column(String(100), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    domain: Mapped[str] = mapped_column(String(100), index=True)
+    canonical_event_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("canonical_events.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+    __table_args__ = (
+        Index("ix_canonical_event_frames_domain_type", "domain", "frame_type"),
+    )
 
 
 class MarketEventLink(Base):
@@ -77,7 +111,42 @@ class MarketEventLink(Base):
     canonical_event_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("canonical_events.id"), primary_key=True
     )
+    link_reason: Mapped[str] = mapped_column(String(100), default="platform_group_key")
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
     linked_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_market_event_links_event", "canonical_event_id", "linked_at"),
+    )
+
+
+class IdentityMatchReview(Base):
+    __tablename__ = "identity_match_reviews"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    raw_market_id: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), unique=True, index=True)
+    canonical_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("canonical_events.id"), nullable=True, index=True
+    )
+    status: Mapped[str] = mapped_column(String(50), default="unresolved", index=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    scorer_version: Mapped[str] = mapped_column(String(100), default="identity-v2")
+    review_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    reviewed_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    __table_args__ = (
+        Index("ix_identity_match_reviews_status_reviewed", "status", "reviewed_at"),
+    )
+
+
+class EventFrameMembership(Base):
+    __tablename__ = "event_frame_memberships"
+    raw_market_id: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), primary_key=True)
+    frame_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("canonical_event_frames.id"), primary_key=True)
+    membership_type: Mapped[str] = mapped_column(String(100), default="same_event_family")
+    confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_event_frame_memberships_frame", "frame_id", "created_at"),
+    )
 
 
 class MarketRelation(Base):
@@ -88,10 +157,84 @@ class MarketRelation(Base):
     relation_type: Mapped[str] = mapped_column(String(100), index=True)
     confidence: Mapped[float] = mapped_column(Float)
     evidence: Mapped[dict] = mapped_column(JSON)
-    created_by: Mapped[str] = mapped_column(String(100))  # "stage1_constraint" | "stage2_llm"
+    created_by: Mapped[str] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
     __table_args__ = (
         Index("ix_market_relations_pair", "from_market_id", "to_market_id"),
+    )
+
+
+class LogicalRelation(Base):
+    __tablename__ = "logical_relations"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    from_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    to_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    frame_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("canonical_event_frames.id"), nullable=True, index=True)
+    relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    proof_status: Mapped[str] = mapped_column(String(50), default="verified", index=True)
+    tradeable_relation: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_logical_relations_pair", "from_market_id", "to_market_id"),
+        Index("ix_logical_relations_tradeable", "tradeable_relation", "proof_status"),
+    )
+
+
+class LogicalRelationSet(Base):
+    __tablename__ = "logical_relation_sets"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    set_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    frame_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("canonical_event_frames.id"), nullable=True, index=True)
+    member_market_ids: Mapped[list] = mapped_column(JSON, default=list)
+    relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    proof_status: Mapped[str] = mapped_column(String(50), default="verified", index=True)
+    tradeable_relation: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    confidence: Mapped[float] = mapped_column(Float)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_logical_relation_sets_tradeable", "tradeable_relation", "proof_status"),
+        Index("ix_logical_relation_sets_frame_relation", "frame_id", "relation_type"),
+    )
+
+
+class RelationReview(Base):
+    __tablename__ = "relation_reviews"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    from_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    to_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    proposed_relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    reviewed_relation_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    proof_status: Mapped[str] = mapped_column(String(50), default="needs_review")
+    tradeable_relation: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    reviewed_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class CounterexampleRecord(Base):
+    __tablename__ = "counterexample_records"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    relation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("logical_relations.id"), nullable=True, index=True)
+    review_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("relation_reviews.id"), nullable=True, index=True)
+    set_key: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    scenario_description: Mapped[str] = mapped_column(Text)
+    resolution_a: Mapped[str] = mapped_column(String(20))
+    resolution_b: Mapped[str] = mapped_column(String(20))
+    why_different: Mapped[str] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(50), default="recorded", index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_counterexample_records_relation_status", "relation_id", "status"),
+        Index("ix_counterexample_records_review_status", "review_id", "status"),
     )
 
 
@@ -108,6 +251,55 @@ class OpportunityCandidate(Base):
     status: Mapped[str] = mapped_column(String(50), default="open", index=True)
     detected_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
     resolved_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    __table_args__ = (
+        Index("ix_opportunity_candidates_status_decision_detected", "status", "court_decision", "detected_at"),
+    )
+
+
+class CandidateDecisionSnapshot(Base):
+    __tablename__ = "candidate_decision_snapshots"
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("opportunity_candidates.id"), primary_key=True
+    )
+    run_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    risk_score: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    relation_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    simulation_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    court_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    snapshot_version: Mapped[str] = mapped_column(String(100), default="decision-snapshot-v1")
+    evaluated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    __table_args__ = (
+        Index("ix_candidate_decision_snapshots_run_evaluated", "run_id", "evaluated_at"),
+    )
+
+
+class RunProofRecord(Base):
+    __tablename__ = "run_proofs"
+    run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    run_status: Mapped[str] = mapped_column(String(50), default="completed", index=True)
+    started_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    config_fingerprint: Mapped[str] = mapped_column(String(255), index=True)
+    provider_fingerprints: Mapped[dict] = mapped_column(JSON, default=dict)
+    readiness_checks: Mapped[dict] = mapped_column(JSON, default=dict)
+    control_state: Mapped[dict] = mapped_column(JSON, default=dict)
+    markets_ingested: Mapped[int] = mapped_column(Integer, default=0)
+    market_counts_by_platform: Mapped[dict] = mapped_column(JSON, default=dict)
+    contracts_compiled: Mapped[int] = mapped_column(Integer, default=0)
+    events_resolved: Mapped[int] = mapped_column(Integer, default=0)
+    relations_detected: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_found: Mapped[int] = mapped_column(Integer, default=0)
+    candidates_watchlisted: Mapped[int] = mapped_column(Integer, default=0)
+    positions_opened: Mapped[int] = mapped_column(Integer, default=0)
+    positions_settled: Mapped[int] = mapped_column(Integer, default=0)
+    fatal_errors: Mapped[list] = mapped_column(JSON, default=list)
+    non_fatal_errors: Mapped[list] = mapped_column(JSON, default=list)
+    proof_version: Mapped[str] = mapped_column(String(100), default="run-proof-v1")
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+    __table_args__ = (
+        Index("ix_run_proofs_status_completed", "run_status", "completed_at"),
+    )
 
 
 class PaperPosition(Base):
@@ -119,6 +311,9 @@ class PaperPosition(Base):
     opened_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
     closed_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
     actual_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    __table_args__ = (
+        Index("ix_paper_positions_candidate_status_opened", "candidate_id", "status", "opened_at"),
+    )
 
 
 class AutopsyRecord(Base):
@@ -129,4 +324,9 @@ class AutopsyRecord(Base):
     actual_resolution: Mapped[dict] = mapped_column(JSON)  # {market_id: "Yes"|"No"|"N/A"}
     resolution_type: Mapped[str] = mapped_column(String(100), index=True)
     identity_error: Mapped[bool] = mapped_column(Boolean, default=False)
+    labels: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    __table_args__ = (
+        Index("ix_autopsy_records_candidate_created", "candidate_id", "created_at"),
+        Index("ix_autopsy_records_identity_error_created", "identity_error", "created_at"),
+    )

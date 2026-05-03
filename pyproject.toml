@@ -16,10 +16,17 @@ dependencies = [
     "httpx>=0.27",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    "websockets>=15.0",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-mock>=3.14", "ruff>=0.8", "anyio[trio]>=4.0", "pytest-anyio>=0.0.0"]
+dev = [
+    "anyio[trio]>=4.0",
+    "pytest>=8.0",
+    "pytest-anyio>=0.0.0",
+    "pytest-mock>=3.14",
+    "ruff>=0.8",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/parallax"]
@@ -33,10 +40,3 @@ markers = ["integration: requires postgres and external APIs"]
 line-length = 100
 target-version = "py312"
 src = ["src"]
-
-[dependency-groups]
-dev = [
-    "anyio>=4.13.0",
-    "pytest>=9.0.3",
-    "pytest-anyio>=0.0.0",
-]

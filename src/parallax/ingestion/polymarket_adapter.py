@@ -1,4 +1,6 @@
 from __future__ import annotations
+import asyncio
+import json
 from datetime import datetime
 import httpx
 from parallax.ingestion.adapter import PlatformAdapter
@@ -6,6 +8,8 @@ from parallax.shared.schemas import RawMarketData
 
 _GAMMA_BASE = "https://gamma-api.polymarket.com"
 _PAGE_SIZE = 100
+_RETRYABLE_FETCH_ATTEMPTS = 3
+_RETRYABLE_FETCH_DELAY_SECONDS = 1.0
 
 
 class PolymarketAdapter(PlatformAdapter):
@@ -33,7 +37,8 @@ class PolymarketAdapter(PlatformAdapter):
         offset = 0
         while len(results) < self._max_events:
             limit = min(_PAGE_SIZE, self._max_events - len(results))
-            resp = await client.get(
+            resp = await self._get_with_retries(
+                client,
                 f"{_GAMMA_BASE}/markets",
                 params={"active": "true", "closed": "false", "limit": limit, "offset": offset},
             )
@@ -50,17 +55,33 @@ class PolymarketAdapter(PlatformAdapter):
             offset += limit
         return results
 
+    async def _get_with_retries(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        params: dict[str, object],
+    ) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(1, _RETRYABLE_FETCH_ATTEMPTS + 1):
+            try:
+                return await client.get(url, params=params)
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_exc = exc
+                if attempt >= _RETRYABLE_FETCH_ATTEMPTS:
+                    raise
+                await asyncio.sleep(_RETRYABLE_FETCH_DELAY_SECONDS * attempt)
+        assert last_exc is not None
+        raise last_exc
+
     def _parse(self, raw: dict) -> RawMarketData | None:
         try:
-            end_date = raw.get("endDate") or raw.get("end_date_iso")
+            end_date = raw.get("endDate") or raw.get("endDateIso") or raw.get("end_date_iso")
             if not end_date:
                 return None
             deadline = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
 
-            tokens: list[dict] = raw.get("tokens", [])
-            outcomes = [t.get("outcome", "") for t in tokens]
-            prices_raw = [t.get("price") for t in tokens]
-            outcome_prices = [float(p) if p is not None else 0.0 for p in prices_raw]
+            outcomes, outcome_prices = self._parse_outcomes(raw)
 
             return RawMarketData(
                 platform="polymarket",
@@ -71,7 +92,7 @@ class PolymarketAdapter(PlatformAdapter):
                 outcomes=outcomes,
                 outcome_prices=outcome_prices,
                 category=raw.get("category"),
-                group_id=raw.get("eventId"),
+                group_id=self._extract_group_id(raw),
                 deadline=deadline,
                 is_closed=bool(raw.get("closed", False)),
                 resolution_source=raw.get("resolutionSource"),
@@ -79,3 +100,51 @@ class PolymarketAdapter(PlatformAdapter):
             )
         except (KeyError, ValueError):
             return None
+
+    @staticmethod
+    def _parse_outcomes(raw: dict) -> tuple[list[str], list[float]]:
+        tokens = raw.get("tokens")
+        if isinstance(tokens, list) and tokens:
+            outcomes = [str(token.get("outcome", "")) for token in tokens]
+            prices = [float(token.get("price")) if token.get("price") is not None else 0.0 for token in tokens]
+            return outcomes, prices
+
+        outcomes_raw = PolymarketAdapter._coerce_list(raw.get("outcomes"))
+        prices_raw = PolymarketAdapter._coerce_list(raw.get("outcomePrices"))
+        outcomes = [str(value) for value in outcomes_raw]
+        prices = [float(value) if value is not None else 0.0 for value in prices_raw]
+        return outcomes, prices
+
+    @staticmethod
+    def _extract_group_id(raw: dict) -> str | None:
+        for key in ("eventId", "event_id"):
+            value = raw.get(key)
+            if value is not None:
+                text = str(value).strip()
+                if text:
+                    return text
+
+        events = raw.get("events")
+        if isinstance(events, list):
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                for key in ("id", "ticker", "slug"):
+                    value = event.get(key)
+                    if value is not None:
+                        text = str(value).strip()
+                        if text:
+                            return text
+        return None
+
+    @staticmethod
+    def _coerce_list(value: object) -> list:
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []

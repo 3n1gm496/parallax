@@ -21,9 +21,9 @@ compiled contracts. Free-form LLM assertions about market equivalence are not ve
 
 ## Decision
 
-Use a **hybrid two-stage approach**:
+Use a **hybrid relation-analysis approach**:
 
-**Stage 1 — Deterministic constraint rules** (fast, zero LLM cost, high precision):
+**Structural screening** (fast, zero LLM cost, high precision):
 - Sum check: does a candidate set of mutually exclusive markets sum to < 0.97?
   → candidates for `mutually_exclusive_mispricing` or `exhaustive_set_mispricing`
 - Price inversion: does Market A YES price + Market B YES price < 0.97 where markets share
@@ -31,9 +31,9 @@ Use a **hybrid two-stage approach**:
 - Same-platform grouping: markets in the same Polymarket group or condition set
   → candidates for `exhaustive` sets
 - Cross-platform temporal proximity: same event domain, overlapping deadline windows
-  → candidates for cross-platform relation analysis
+  → candidates for semantic relation analysis
 
-**Stage 2 — LLM semantic analysis** (for candidates that pass Stage 1 only):
+**Semantic analysis** (for candidates that pass structural screening only):
 - Compile both markets into structured contracts (via Event Contract Compiler)
 - Compare `yes_conditions`, `no_conditions`, `exclusions`, `deadline`, `oracle`
 - Classify relation type from the 13-type taxonomy
@@ -41,7 +41,7 @@ Use a **hybrid two-stage approach**:
   differently) — **mandatory for all `equivalent` and `subset` claims**
 - Assign confidence score (calibrated against historical labeled pairs as data accumulates)
 
-A relation claim is only emitted if Stage 1 passes AND Stage 2 produces a structured contract
+A relation claim is only emitted if structural screening passes AND semantic analysis produces a structured contract
 comparison AND (for equivalence claims) counterexample generation fails to find a breaking
 scenario after 2 attempts.
 
@@ -74,16 +74,16 @@ Cons:
 ### Option C: Hybrid — rules first, LLM second (chosen)
 
 Pros:
-- Dramatically reduces LLM candidate set (thousands → dozens)
+- Dramatically reduces LLM candidate set (thousands -> dozens)
 - LLM operates on pre-filtered, higher-quality candidates only
-- Every relation claim has a two-stage evidence trail
+- Every relation claim has a structural plus semantic evidence trail
 - Counterexample generation is mandatory — guards against the Semantic Equivalence Illusion
-- Stage 1 criteria are explicit and auditable
+- Structural criteria are explicit and auditable
 
 Cons:
-- Stage 1 rule set requires maintenance as market formats evolve
-- Two-stage pipeline adds latency vs single-pass LLM
-- Stage 1 may miss novel semantic relations not covered by rules
+- Structural rule set requires maintenance as market formats evolve
+- Two-step pipeline adds latency vs single-pass LLM
+- Structural screening may miss novel semantic relations not covered by rules
 
 ## Consequences
 
@@ -94,7 +94,7 @@ Positive:
 - Mandatory counterexample generation prevents the Semantic Equivalence Illusion
 
 Negative:
-- Stage 1 rules require maintenance
+- Structural rules require maintenance
 - Higher latency than single-pass LLM
 
 Neutral:
@@ -103,22 +103,22 @@ Neutral:
 
 ## Risks
 
-- Stage 1 rules filter out valid candidates that LLM-only would catch.
-  Monitor: autopsy `identity_error` rate. If >15% of autopsied false negatives trace to Stage 1
-  filtering, loosen Stage 1 criteria.
+- Structural rules filter out valid candidates that LLM-only would catch.
+  Monitor: autopsy `identity_error` rate. If >15% of autopsied false negatives trace to structural
+  filtering, loosen structural criteria.
 - LLM counterexample generation fails to surface real breaking scenarios.
   Mitigate: require 2 independent attempts; flag as `low_confidence_equivalence` if both fail
   to find a breaking scenario, rather than silently promoting to `equivalent`.
-- Stage 1 rules become stale as prediction market platforms evolve their naming and grouping
+- Structural rules become stale as prediction market platforms evolve their naming and grouping
   conventions. Mitigate: rules are data-driven where possible (using platform-provided category
-  and grouping fields); add monitoring for Stage 1 pass rate over time.
+  and grouping fields); add monitoring for structural pass rate over time.
 
 ## Rollback / revisit plan
 
-If autopsy data shows Stage 1 is filtering too aggressively: loosen numeric thresholds or add
-rules to capture the missed patterns. If Stage 2 LLM quality is insufficient: switch provider
+If autopsy data shows structural screening is filtering too aggressively: loosen numeric thresholds or add
+rules to capture the missed patterns. If semantic LLM quality is insufficient: switch provider
 per ADR-0002 or add calibrated prompting layers. If fine-tuning data accumulates: build a
-calibrated classifier for Stage 2 relation typing.
+calibrated classifier for semantic relation typing.
 
 ## References
 

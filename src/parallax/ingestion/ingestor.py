@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import logging
+from parallax.config import settings
 from parallax.ingestion.adapter import PlatformAdapter
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.audit.service import AuditService
@@ -16,17 +17,28 @@ class IngestorService:
         adapters: list[PlatformAdapter],
         session_factory,
         poll_interval_seconds: int = 300,
+        adapter_timeout_seconds: int | None = None,
     ) -> None:
         self._adapters = adapters
         self._session_factory = session_factory
         self._poll_interval = poll_interval_seconds
+        self._adapter_timeout_seconds = (
+            settings.ingestion_adapter_timeout_seconds
+            if adapter_timeout_seconds is None
+            else adapter_timeout_seconds
+        )
         self._running = False
 
     async def run_once(self) -> dict[str, int]:
-        """Fetch and upsert from all adapters. Returns per-platform counts."""
+        """Fetch and upsert from all adapters. Returns per-platform processed counts."""
         counts: dict[str, int] = {}
         for adapter in self._adapters:
-            counts[adapter.platform_name] = await self._ingest_one(adapter)
+            try:
+                counts[adapter.platform_name] = await self._ingest_one(adapter)
+            except Exception as exc:
+                counts[adapter.platform_name] = 0
+                log.warning("ingestion adapter %s failed: %s", adapter.platform_name, exc)
+                self._safe_record_adapter_failure(adapter.platform_name, exc)
         return counts
 
     async def run_forever(self) -> None:
@@ -43,8 +55,10 @@ class IngestorService:
         self._running = False
 
     async def _ingest_one(self, adapter: PlatformAdapter) -> int:
-        markets = await adapter.fetch_markets()
-        created_count = 0
+        markets = await asyncio.wait_for(
+            adapter.fetch_markets(),
+            timeout=max(1, self._adapter_timeout_seconds),
+        )
         with self._session_factory() as session:
             repo = MarketRepository(session)
             audit = AuditService(session)
@@ -57,6 +71,22 @@ class IngestorService:
                         f"{data.platform}:{data.market_id}",
                         {"platform": data.platform, "title": data.title},
                     )
-                    created_count += 1
             session.commit()
-        return created_count
+        return len(markets)
+
+    def _safe_record_adapter_failure(self, platform_name: str, exc: Exception) -> None:
+        try:
+            self._record_adapter_failure(platform_name, exc)
+        except Exception:
+            log.exception("failed to persist ingestion failure audit for %s", platform_name)
+
+    def _record_adapter_failure(self, platform_name: str, exc: Exception) -> None:
+        error_text = str(exc).strip() or exc.__class__.__name__
+        with self._session_factory() as session:
+            AuditService(session).record(
+                "ingestion.adapter.failed",
+                "platform",
+                platform_name,
+                {"platform": platform_name, "error": error_text},
+            )
+            session.commit()

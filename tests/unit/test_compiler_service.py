@@ -29,6 +29,7 @@ def _market(mid: str = "pm:a") -> MagicMock:
     m.deadline = datetime(2025, 12, 31, tzinfo=timezone.utc)
     m.is_closed = False
     m.raw_payload = {}
+    m.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
     return m
 
 
@@ -50,17 +51,23 @@ class TestCompilerService:
         result = await svc.compile(_market())
 
         provider.compile.assert_called_once()
-        session.add.assert_called_once()
-        assert result == contract
+        assert session.add.called
+        assert result.yes_conditions == contract.yes_conditions
+        assert result.canonical_subject is not None
+        assert result.proposition_family is not None
 
     @pytest.mark.anyio
     async def test_compile_skips_recently_compiled(self):
         existing = MagicMock()
         existing.contract_json = _contract().model_dump()
+        existing.compiler_version = "anthropic-sonnet-4-6-v1"
+        existing.compiled_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
         svc, session, provider = self._make_svc(existing_contract=existing)
         provider.compile = AsyncMock()
+        market = _market()
+        market.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
-        result = await svc.compile(_market())
+        result = await svc.compile(market)
 
         provider.compile.assert_not_called()
         session.add.assert_not_called()
@@ -75,7 +82,7 @@ class TestCompilerService:
 
         await svc.compile(_market())
 
-        session.add.assert_called_once()
+        assert session.add.called
 
     def test_get_recent_contract_returns_none_for_new_market(self):
         session = MagicMock()
@@ -84,3 +91,31 @@ class TestCompilerService:
         svc = CompilerService(session, provider)
         result = svc._get_recent_contract("pm:a")
         assert result is None
+
+    @pytest.mark.anyio
+    async def test_compile_recompiles_when_market_changed_after_cached_contract(self):
+        existing = MagicMock()
+        existing.contract_json = _contract().model_dump()
+        existing.compiler_version = "anthropic-sonnet-4-6-v1"
+        existing.compiled_at = datetime(2024, 12, 31, tzinfo=timezone.utc)
+        svc, session, provider = self._make_svc(existing_contract=existing)
+        provider.compile = AsyncMock(return_value=_contract())
+
+        await svc.compile(_market())
+
+        provider.compile.assert_called_once()
+
+    @pytest.mark.anyio
+    async def test_compile_recompiles_when_provider_version_changes(self):
+        existing = MagicMock()
+        existing.contract_json = _contract().model_dump()
+        existing.compiler_version = "older-version"
+        existing.compiled_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
+        svc, session, provider = self._make_svc(existing_contract=existing)
+        provider.compile = AsyncMock(return_value=_contract())
+        market = _market()
+        market.updated_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+        await svc.compile(market)
+
+        provider.compile.assert_called_once()
