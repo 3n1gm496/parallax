@@ -238,3 +238,142 @@ class TestPipelineRunner:
         assert len(summary.errors) == 1
         assert "compile:pm:broken:boom" in summary.errors[0]
         assert compile_mock.await_count == 2
+
+    @pytest.mark.anyio
+    async def test_run_once_uses_replay_path_when_history_available(self):
+        """When orderbook disabled and replay history exists, evaluate_with_replay is called."""
+        from parallax.execution.replay_stats import ReplayStats
+
+        session = MagicMock()
+        session.commit = MagicMock()
+        session.begin_nested.side_effect = self._nested_tx
+
+        candidate = MagicMock()
+        candidate.id = MagicMock(__str__=lambda s: "cand-replay")
+        candidate.opportunity_type = "pure_arbitrage"
+        candidate.court_decision = "APPROVED"
+        candidate.payoff_matrix = {
+            "legs": [], "total_cost": 0.1, "scenarios": [],
+            "worst_case_payoff": 0.05, "best_case_payoff": 0.05,
+            "breaking_scenario": None, "opportunity_type": "pure_arbitrage",
+            "friction_bps": 50,
+        }
+
+        stats = ReplayStats(
+            opportunity_type="pure_arbitrage",
+            n_settled=5,
+            win_rate=0.8,
+            mean_edge_capture=0.7,
+        )
+
+        with (
+            patch("parallax.pipeline.runner.settings") as mock_settings,
+            patch("parallax.pipeline.runner.build_readiness_payload") as mock_readiness,
+            patch("parallax.pipeline.runner.MarketRepository") as MockMarket,
+            patch("parallax.pipeline.runner.PostgresGraphRepository"),
+            patch("parallax.pipeline.runner.AuditService"),
+            patch("parallax.pipeline.runner.IdentityService") as MockIdentity,
+            patch("parallax.pipeline.runner.RelationAnalysisService") as MockRelationService,
+            patch("parallax.pipeline.runner.DivergenceService") as MockDivergence,
+            patch("parallax.pipeline.runner.CandidateRepository") as MockCandidates,
+            patch("parallax.pipeline.runner.CourtService") as MockCourt,
+            patch("parallax.pipeline.runner.TrackerService") as MockTracker,
+            patch("parallax.pipeline.runner.CompilerService") as MockCompiler,
+            patch("parallax.pipeline.runner.AnthropicCompilerProvider"),
+            patch("parallax.pipeline.runner.SemanticRelationAnalyzer"),
+            patch("parallax.pipeline.runner.IngestorService") as MockIngestor,
+            patch("parallax.pipeline.runner.ReplayStatisticsService") as MockReplay,
+        ):
+            mock_settings.anthropic_api_key = "test-key"
+            mock_settings.friction_bps = 50
+            mock_settings.polymarket_max_events_per_poll = 50
+            mock_settings.kalshi_max_events_per_poll = 50
+            mock_settings.pipeline_max_open_markets = 0
+            mock_settings.orderbook_enabled = False
+            mock_settings.runtime_global_pause = False
+            mock_settings.runtime_degraded_read_only = False
+            mock_readiness.return_value = MagicMock(model_dump=lambda **kwargs: {"checks": {}, "controls": {}})
+
+            MockMarket.return_value.list_open.return_value = []
+            MockIdentity.return_value.resolve_all_ungrouped.return_value = 0
+            MockRelationService.return_value.run = AsyncMock(return_value=0)
+            MockDivergence.return_value.scan.return_value = 0
+            MockCandidates.return_value.list_open.return_value = [candidate]
+            MockCandidates.return_value.get_decision_snapshot.return_value = None
+            MockCandidates.return_value.snapshot_to_schema.return_value = None
+            MockCourt.return_value.evaluate_with_replay.return_value = MagicMock(value="WATCHLIST")
+            MockCourt.return_value.evaluate.return_value = MagicMock(value="WATCHLIST")
+            MockTracker.return_value.open_position.return_value = None
+            MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={"polymarket": 0, "kalshi": 0})
+            MockReplay.return_value.get_stats.return_value = stats
+
+            await self._make_runner(session).run_once()
+
+        MockCourt.return_value.evaluate_with_replay.assert_called_once()
+        MockCourt.return_value.evaluate.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_run_once_uses_heuristic_when_no_replay_history(self):
+        """When orderbook disabled and no replay history, evaluate (heuristic) is called."""
+        session = MagicMock()
+        session.commit = MagicMock()
+        session.begin_nested.side_effect = self._nested_tx
+
+        candidate = MagicMock()
+        candidate.id = MagicMock(__str__=lambda s: "cand-heuristic")
+        candidate.opportunity_type = "pure_arbitrage"
+        candidate.court_decision = "APPROVED"
+        candidate.payoff_matrix = {
+            "legs": [], "total_cost": 0.1, "scenarios": [],
+            "worst_case_payoff": 0.05, "best_case_payoff": 0.05,
+            "breaking_scenario": None, "opportunity_type": "pure_arbitrage",
+            "friction_bps": 50,
+        }
+
+        with (
+            patch("parallax.pipeline.runner.settings") as mock_settings,
+            patch("parallax.pipeline.runner.build_readiness_payload") as mock_readiness,
+            patch("parallax.pipeline.runner.MarketRepository") as MockMarket,
+            patch("parallax.pipeline.runner.PostgresGraphRepository"),
+            patch("parallax.pipeline.runner.AuditService"),
+            patch("parallax.pipeline.runner.IdentityService") as MockIdentity,
+            patch("parallax.pipeline.runner.RelationAnalysisService") as MockRelationService,
+            patch("parallax.pipeline.runner.DivergenceService") as MockDivergence,
+            patch("parallax.pipeline.runner.CandidateRepository") as MockCandidates,
+            patch("parallax.pipeline.runner.CourtService") as MockCourt,
+            patch("parallax.pipeline.runner.TrackerService") as MockTracker,
+            patch("parallax.pipeline.runner.CompilerService") as MockCompiler,
+            patch("parallax.pipeline.runner.AnthropicCompilerProvider"),
+            patch("parallax.pipeline.runner.SemanticRelationAnalyzer"),
+            patch("parallax.pipeline.runner.IngestorService") as MockIngestor,
+            patch("parallax.pipeline.runner.ReplayStatisticsService") as MockReplay,
+        ):
+            mock_settings.anthropic_api_key = "test-key"
+            mock_settings.friction_bps = 50
+            mock_settings.polymarket_max_events_per_poll = 50
+            mock_settings.kalshi_max_events_per_poll = 50
+            mock_settings.pipeline_max_open_markets = 0
+            mock_settings.orderbook_enabled = False
+            mock_settings.runtime_global_pause = False
+            mock_settings.runtime_degraded_read_only = False
+            mock_readiness.return_value = MagicMock(model_dump=lambda **kwargs: {"checks": {}, "controls": {}})
+
+            MockMarket.return_value.list_open.return_value = []
+            MockIdentity.return_value.resolve_all_ungrouped.return_value = 0
+            MockRelationService.return_value.run = AsyncMock(return_value=0)
+            MockDivergence.return_value.scan.return_value = 0
+            MockCandidates.return_value.list_open.return_value = [candidate]
+            MockCandidates.return_value.get_decision_snapshot.return_value = None
+            MockCandidates.return_value.snapshot_to_schema.return_value = None
+            MockCourt.return_value.evaluate.return_value = MagicMock(value="WATCHLIST")
+            MockCourt.return_value.evaluate_with_replay.return_value = MagicMock(value="WATCHLIST")
+            MockTracker.return_value.open_position.return_value = None
+            MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={"polymarket": 0, "kalshi": 0})
+            MockReplay.return_value.get_stats.return_value = None  # no history
+
+            await self._make_runner(session).run_once()
+
+        MockCourt.return_value.evaluate.assert_called_once()
+        MockCourt.return_value.evaluate_with_replay.assert_not_called()

@@ -17,6 +17,7 @@ from parallax.court.service import CourtService
 from parallax.divergence.service import DivergenceService
 from parallax.db.models import RunProofRecord
 from parallax.execution.fetcher import OrderbookFetcher
+from parallax.execution.replay_stats import ReplayStatisticsService
 from parallax.execution.schemas import OrderbookSnapshot
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.identity.service import IdentityService
@@ -310,7 +311,13 @@ class PipelineRunner:
                                         _persist_snapshot_sync(session, snap)
                                 decision = court_svc.evaluate_with_snapshots(cid, snapshots, run_id=run_id)
                             else:
-                                decision = court_svc.evaluate(cid, run_id=run_id)
+                                replay_stats = ReplayStatisticsService(session).get_stats(
+                                    candidate.opportunity_type
+                                )
+                                if replay_stats is not None:
+                                    decision = court_svc.evaluate_with_replay(cid, run_id=run_id)
+                                else:
+                                    decision = court_svc.evaluate(cid, run_id=run_id)
                             snapshot = candidate_repo.snapshot_to_schema(candidate_repo.get_decision_snapshot(cid))
                             simulation = snapshot.simulation_result if snapshot is not None else None
                             audit_svc.record(
