@@ -62,6 +62,24 @@ TEST_DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55433/parallax_te
 - Anthropic compile on current markets
 - semantic analysis on current live pairs
 
+## P0.1b: CLOB Adapter Smoke Test
+
+Run to verify live Polymarket CLOB connectivity (no credentials required):
+
+```bash
+SMOKE_CLOB=1 uv run pytest tests/smoke/ -v
+```
+
+With Kalshi API key (optional):
+
+```bash
+SMOKE_CLOB=1 KALSHI_API_KEY=<key> SMOKE_KALSHI_TICKER=<ticker> \
+  uv run pytest tests/smoke/ -v
+```
+
+This confirms the Polymarket CLOB adapter returns a valid snapshot from a live market.
+Kalshi returns `None` gracefully without credentials — acceptable for this test.
+
 ## P0.2: Recent Real-Data Runtime Proof
 
 ### Required Environment
@@ -99,10 +117,24 @@ curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
 curl http://127.0.0.1:8000/api/ops/metrics
 curl http://127.0.0.1:8000/api/ops/runs
+curl http://127.0.0.1:8000/api/ops/execution
 curl http://127.0.0.1:8000/api/candidates
 curl http://127.0.0.1:8000/api/positions
 curl http://127.0.0.1:8000/api/audit
 ```
+
+**Proof bundle capture (single command):**
+
+```bash
+mkdir -p docs/proofs
+curl -s http://127.0.0.1:8000/api/ops/proof \
+  | python3 -m json.tool \
+  > docs/proofs/proof-$(date +%Y%m%d-%H%M%S).json
+cat docs/proofs/proof-*.json | python3 -c \
+  "import sys,json; d=json.load(sys.stdin); print(d['bundle_status'], [i['name'] for i in d['proof_checklist'] if not i['passed']])"
+```
+
+`bundle_status == "complete"` with an empty failed list is the strongest proof claim.
 
 ### Evidence Required Before Claiming Runtime Proof
 
@@ -138,6 +170,23 @@ From candidates and positions:
 - `GET /api/candidates/{candidate_id}/decision` should return the persisted snapshot directly
 - if any position was opened, that position can be settled through `POST /api/positions/{id}/settle`
 - resulting autopsy appears in `GET /api/candidates/{id}/autopsy`
+
+From `/api/ops/execution` (when `orderbook_enabled=True`):
+
+- non-zero `venue_token_count` for the platforms that ran
+- `execution_model_distribution` shows `snapshot_based` entries, not only `heuristic`
+
+From `/api/ops/proof`:
+
+- `bundle_status == "complete"` means all seven checklist items passed
+- `bundle_status == "partial"` — inspect `proof_checklist` for which items failed
+- save the JSON artifact to `docs/proofs/proof-<timestamp>.json` as the durable proof record
+
+From automated settlement (after positions close):
+
+- `GET /api/positions` shows positions with `status: "CLOSED"` and non-null `actual_pnl`
+- `GET /api/candidates/{id}/autopsy` shows the corresponding autopsy record
+- `run_proof.positions_settled > 0` in at least one run entry in `/api/ops/runs`
 
 From the UI:
 
