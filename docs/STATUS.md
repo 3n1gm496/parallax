@@ -103,6 +103,17 @@ Orderbook signals now feed back into `RiskScore` at court evaluation time:
 - `CourtService._persist_evaluation()`: accepts `adjusted_risk` kwarg; persists it in decision snapshot when provided
 - Original `opportunity_candidates.risk_scores` column is never mutated; adjustment is evaluation-time only
 
+## Replay-Based Execution Path (Fase 5 — 2026-05-03)
+
+Settled paper-position history now feeds back into the execution estimate when live orderbook snapshots are unavailable:
+
+- `ReplayStatisticsService` (`src/parallax/execution/replay_stats.py`): queries the last 20 closed positions for the same opportunity type, computes `win_rate` and `mean_edge_capture` from `CandidateDecisionSnapshot.simulation_result` joined with `PaperPosition.actual_pnl`; returns `None` when fewer than 3 settled positions exist
+- `SimulatorService.simulate_replay()`: calls heuristic first, then applies replay calibration — `fill_probability = win_rate`, `simulated_pnl = heuristic_pnl × effective_capture` (clamped [0, 1.5]); falls back to heuristic model when history is insufficient
+- `CourtService.evaluate_with_replay()`: mirrors `evaluate()` but calls `simulate_replay()`; all existing court gates apply to the replay-adjusted simulation
+- `PipelineRunner`: when `orderbook_enabled=False`, checks `ReplayStatisticsService.get_stats()` before deciding between replay and heuristic paths; snapshot path takes priority when enabled
+
+The replay path only activates after sufficient settlement history accumulates (minimum 3 closed positions per opportunity type).
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
