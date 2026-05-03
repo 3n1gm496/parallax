@@ -16,6 +16,8 @@ from parallax.config import settings
 from parallax.court.service import CourtService
 from parallax.divergence.service import DivergenceService
 from parallax.db.models import RunProofRecord
+from parallax.execution.fetcher import OrderbookFetcher
+from parallax.execution.schemas import OrderbookSnapshot
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.identity.service import IdentityService
 from parallax.ingestion.adapter import PlatformAdapter
@@ -27,6 +29,7 @@ from parallax.ops.schemas import RunSummary
 from parallax.ingestion.polymarket_adapter import PolymarketAdapter
 from parallax.detection.semantic import SemanticRelationAnalyzer
 from parallax.prover.service import RelationAnalysisService
+from parallax.shared.schemas import PayoffMatrix
 from parallax.tracker.service import TrackerService
 
 log = logging.getLogger(__name__)
@@ -71,6 +74,49 @@ def build_ingestion_adapters() -> list[PlatformAdapter]:
         PolymarketAdapter(max_events=settings.polymarket_max_events_per_poll),
         KalshiAdapter(max_events=settings.kalshi_max_events_per_poll),
     ]
+
+
+async def _fetch_candidate_snapshots(
+    fetcher: OrderbookFetcher,
+    session: Session,
+    candidate,
+) -> dict[str, OrderbookSnapshot | None]:
+    """Fetch orderbook snapshots for each leg of a candidate."""
+    from sqlalchemy import select as sa_select
+    from parallax.db.models import VenueToken
+
+    try:
+        matrix = PayoffMatrix.model_validate(candidate.payoff_matrix)
+    except Exception:
+        return {}
+
+    snapshots: dict[str, OrderbookSnapshot | None] = {}
+    seen: set[str] = set()
+    for leg in matrix.legs:
+        mid = leg.market_id
+        if mid in seen:
+            continue
+        seen.add(mid)
+        platform = leg.platform or "unknown"
+        token_id: str | None = None
+        if platform == "polymarket":
+            try:
+                row = session.execute(
+                    sa_select(VenueToken.token_id).where(
+                        VenueToken.platform == platform,
+                        VenueToken.raw_market_id == mid,
+                        VenueToken.outcome == leg.side,
+                    )
+                ).scalar_one_or_none()
+                token_id = row
+            except Exception:
+                token_id = None
+        try:
+            snap = await fetcher.fetch(platform, mid, leg.side, token_id=token_id)
+        except Exception:
+            snap = None
+        snapshots[mid] = snap
+    return snapshots
 
 
 class PipelineRunner:
@@ -231,12 +277,21 @@ class PipelineRunner:
                 candidate_repo = CandidateRepository(session)
                 court_svc = CourtService(session)
                 tracker_svc = TrackerService(session)
+                ob_fetcher = OrderbookFetcher(settings) if settings.orderbook_enabled else None
 
                 for candidate in candidate_repo.list_open():
                     cid = str(candidate.id)
                     try:
+                        snapshots: dict[str, OrderbookSnapshot | None] | None = None
+                        if ob_fetcher is not None:
+                            snapshots = await _fetch_candidate_snapshots(
+                                ob_fetcher, session, candidate
+                            )
                         with session.begin_nested():
-                            decision = court_svc.evaluate(cid, run_id=run_id)
+                            if snapshots is not None:
+                                decision = court_svc.evaluate_with_snapshots(cid, snapshots, run_id=run_id)
+                            else:
+                                decision = court_svc.evaluate(cid, run_id=run_id)
                             snapshot = candidate_repo.snapshot_to_schema(candidate_repo.get_decision_snapshot(cid))
                             simulation = snapshot.simulation_result if snapshot is not None else None
                             audit_svc.record(

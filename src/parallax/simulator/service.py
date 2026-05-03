@@ -1,6 +1,9 @@
 from __future__ import annotations
 from sqlalchemy.orm import Session
 from parallax.candidates.repository import CandidateRepository
+from parallax.execution.estimator import DepthAwareExecutablePriceEstimator
+from parallax.execution.fill_simulator import DepthAwareFillSimulator
+from parallax.execution.schemas import OrderbookSnapshot
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import OpportunityType, PayoffMatrix, RiskScore, SimulationResult
@@ -69,6 +72,126 @@ class SimulatorService:
             execution_quality=self._execution_quality(fill_probability),
             risk_flags=risk_flags,
             venue_breakdown=self._venue_breakdown(platforms, opportunity_type),
+        )
+
+    def simulate_snapshot(
+        self,
+        candidate_id: str,
+        snapshots: dict[str, OrderbookSnapshot | None],
+    ) -> SimulationResult:
+        """Snapshot-based simulation. Snapshots keyed by market_id.
+
+        Falls back to heuristic per-leg when snapshot is missing,
+        and marks execution_model as 'degraded' in that case.
+        """
+        candidate = self._repo.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"Candidate {candidate_id} not found")
+
+        matrix = PayoffMatrix.model_validate(candidate.payoff_matrix)
+        risk = RiskScore.model_validate(candidate.risk_scores) if candidate.risk_scores else None
+        relation = self._load_primary_relation(candidate.market_ids)
+        relation_signals = get_relation_signals(relation)
+        opportunity_type = OpportunityType(candidate.opportunity_type)
+
+        estimator = DepthAwareExecutablePriceEstimator()
+        fill_sim = DepthAwareFillSimulator()
+
+        total_slippage = 0.0
+        worst_fill_probability = 1.0
+        worst_partial_fill_risk = 0.0
+        snapshot_ids: list[str] = []
+        all_supported = True
+        any_stale = False
+        any_snapshot_missing = False
+
+        for leg in matrix.legs:
+            snap = snapshots.get(leg.market_id)
+            if snap is None:
+                any_snapshot_missing = True
+                # Fallback: heuristic slippage for this leg
+                leg_slippage = leg.cost * 0.005 if leg.cost else 0.0
+                total_slippage += leg_slippage
+                continue
+
+            snapshot_ids.append(snap.id)
+            if snap.is_stale:
+                any_stale = True
+
+            qty = leg.quantity
+            ep = estimator.estimate(snap, "buy", qty)
+            fs = fill_sim.simulate(snap, "buy", qty)
+
+            if ep.vwap_price is not None and ep.vwap_price > leg.price:
+                total_slippage += (ep.vwap_price - leg.price) * qty
+
+            if not ep.is_supported:
+                all_supported = False
+
+            worst_fill_probability = min(worst_fill_probability, fs.fill_probability)
+            worst_partial_fill_risk = max(worst_partial_fill_risk, fs.partial_fill_risk)
+
+        execution_model: str
+        if any_snapshot_missing:
+            execution_model = "degraded"
+        else:
+            execution_model = "snapshot_based"
+
+        simulated_pnl = matrix.worst_case_payoff - total_slippage
+        quote_staleness: float | None = None
+        if snapshot_ids:
+            staleness_values = [
+                snapshots[leg.market_id].staleness_seconds
+                for leg in matrix.legs
+                if leg.market_id in snapshots and snapshots[leg.market_id] is not None
+            ]
+            quote_staleness = max(staleness_values) if staleness_values else None
+
+        note = (
+            f"snapshot execution model ({execution_model}): "
+            f"displayed_edge={matrix.worst_case_payoff:.6f}, "
+            f"slippage_drag={total_slippage:.6f}, "
+            f"depth_supported={all_supported}, "
+            f"any_stale={any_stale}"
+        )
+
+        risk_flags = self._risk_flags(
+            opportunity_type, relation_signals, risk,
+            [leg.platform or "unknown" for leg in matrix.legs],
+            worst_fill_probability,
+        )
+        if any_stale:
+            risk_flags.append("stale_quote")
+        if not all_supported:
+            risk_flags.append("insufficient_depth")
+        if worst_partial_fill_risk > 0.5:
+            risk_flags.append("high_partial_fill_risk")
+
+        return SimulationResult(
+            candidate_id=candidate_id,
+            displayed_edge=round(matrix.worst_case_payoff, 6),
+            executable_edge=round(simulated_pnl, 6),
+            simulated_pnl=round(simulated_pnl, 6),
+            friction_bps=matrix.friction_bps,
+            fill_probability=round(worst_fill_probability, 4),
+            is_executable=simulated_pnl > 0 and all_supported and not any_stale,
+            note=note,
+            estimated_slippage_bps=int(round(total_slippage / matrix.total_cost * 10000)) if matrix.total_cost > 0 else 0,
+            estimated_slippage_cost=round(total_slippage, 6),
+            spread_cross_cost=0.0,
+            stale_quote_cost=0.0,
+            partial_fill_cost=0.0,
+            non_execution_cost=0.0,
+            execution_quality=self._execution_quality(worst_fill_probability),
+            risk_flags=risk_flags,
+            venue_breakdown=self._venue_breakdown(
+                [leg.platform or "unknown" for leg in matrix.legs], opportunity_type
+            ),
+            execution_model=execution_model,  # type: ignore[arg-type]
+            quote_staleness_seconds=quote_staleness,
+            snapshot_ids=snapshot_ids,
+            depth_support=all_supported,
+            partial_fill_risk=round(worst_partial_fill_risk, 4),
         )
 
     @staticmethod

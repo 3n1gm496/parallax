@@ -472,6 +472,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
 ]
 
 [package.optional-dependencies]
@@ -481,13 +482,6 @@ dev = [
     { name = "pytest-anyio" },
     { name = "pytest-mock" },
     { name = "ruff" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "anyio" },
-    { name = "pytest" },
-    { name = "pytest-anyio" },
 ]
 
 [package.metadata]
@@ -506,15 +500,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
     { name = "sqlalchemy", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 provides-extras = ["dev"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "anyio", specifier = ">=4.13.0" },
-    { name = "pytest", specifier = ">=9.0.3" },
-    { name = "pytest-anyio", specifier = ">=0.0.0" },
-]
 
 [[package]]
 name = "pluggy"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import String, Text, JSON, Float, Boolean, Integer, ForeignKey, DateTime, Index
+from sqlalchemy import String, Text, JSON, Float, Boolean, Integer, ForeignKey, DateTime, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -329,4 +329,42 @@ class AutopsyRecord(Base):
     __table_args__ = (
         Index("ix_autopsy_records_candidate_created", "candidate_id", "created_at"),
         Index("ix_autopsy_records_identity_error_created", "identity_error", "created_at"),
+    )
+
+
+class VenueToken(Base):
+    __tablename__ = "venue_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    raw_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    token_id: Mapped[str] = mapped_column(String(512), index=True)
+    outcome: Mapped[str] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("platform", "raw_market_id", "outcome", name="uq_venue_tokens_platform_market_outcome"),
+    )
+
+
+class OrderbookSnapshotRecord(Base):
+    __tablename__ = "orderbook_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    platform: Mapped[str] = mapped_column(String(50), index=True)
+    raw_market_id: Mapped[str] = mapped_column(String(255), index=True)
+    token_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(50))
+    captured_at: Mapped[datetime] = mapped_column(_TZ, index=True)
+    bid_levels: Mapped[list] = mapped_column(JSON, default=list)
+    ask_levels: Mapped[list] = mapped_column(JSON, default=list)
+    mid_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spread_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    total_bid_depth: Mapped[float] = mapped_column(Float, default=0.0)
+    total_ask_depth: Mapped[float] = mapped_column(Float, default=0.0)
+    fetcher_version: Mapped[str] = mapped_column(String(50), default="snapshot-v1")
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+    __table_args__ = (
+        Index("ix_orderbook_snapshots_market_captured", "raw_market_id", "captured_at"),
     )

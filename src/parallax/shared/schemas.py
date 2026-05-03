@@ -363,6 +363,12 @@ class SimulationResult(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     venue_breakdown: dict[str, object] = Field(default_factory=dict)
     model_version: str = "heuristic-v3"
+    # Snapshot-based execution fields (defaults keep backward compat with existing snapshots)
+    execution_model: Literal["heuristic", "snapshot_based", "replay_based", "degraded"] = "heuristic"
+    quote_staleness_seconds: float | None = None
+    snapshot_ids: list[str] = Field(default_factory=list)
+    depth_support: bool | None = None
+    partial_fill_risk: float = 0.0
 
 
 class DecisionGate(BaseModel):

@@ -86,3 +86,42 @@ def test_contract_schema_syncs_blueprint_alias_fields():
     assert contract.oracle_scope == "official"
     assert contract.resolution_exclusions == ["void if cancelled"]
     assert contract.polarity == "positive"
+
+
+def test_simulation_result_new_fields_have_defaults():
+    from parallax.shared.schemas import SimulationResult
+
+    result = SimulationResult(
+        candidate_id="test",
+        simulated_pnl=0.01,
+        friction_bps=50,
+        fill_probability=0.8,
+        is_executable=True,
+        note="test",
+    )
+    assert result.execution_model == "heuristic"
+    assert result.quote_staleness_seconds is None
+    assert result.snapshot_ids == []
+    assert result.depth_support is None
+    assert result.partial_fill_risk == 0.0
+
+
+def test_simulation_result_snapshot_mode():
+    from parallax.shared.schemas import SimulationResult
+
+    result = SimulationResult(
+        candidate_id="test",
+        simulated_pnl=0.01,
+        friction_bps=50,
+        fill_probability=0.85,
+        is_executable=True,
+        note="snapshot-based",
+        execution_model="snapshot_based",
+        quote_staleness_seconds=12.3,
+        snapshot_ids=["uuid-1", "uuid-2"],
+        depth_support=True,
+        partial_fill_risk=0.05,
+    )
+    assert result.execution_model == "snapshot_based"
+    assert result.depth_support is True
+    assert result.partial_fill_risk == 0.05

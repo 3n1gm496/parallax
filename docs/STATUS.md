@@ -47,13 +47,32 @@ Parallax currently has a coherent backend and UI slice with:
 - `/ready` now exposes degraded reasons plus runtime control switches for pause, semantic-analysis disable, and live-execution disable
 - `market_relations` is now legacy compatibility persistence only and is disabled by default for new writes
 
+## Orderbook Reality Layer (Fase 1 — 2026-05-03)
+
+The execution layer now has a snapshot-based path alongside the heuristic path:
+
+- `src/parallax/execution/` package: `OrderbookSnapshot`, `OrderbookSide`, `OrderbookLevel`, `DepthAnalysis`, `ExecutionMode`
+- `SimulationResult` carries `execution_model` (heuristic / snapshot_based / replay_based / degraded), `quote_staleness_seconds`, `snapshot_ids`, `depth_support`, `partial_fill_risk`
+- `PolymarketCLOBAdapter`: read-only CLOB orderbook fetch (`GET /book?token_id=…`)
+- `KalshiQuoteAdapter`: read-only orderbook fetch, translates YES/NO cent prices to probability floats
+- `VenueTokenRegistry`: persists (platform, market_id, outcome) → token_id mapping in `venue_tokens`
+- `OrderbookSnapshotStore`: persists and retrieves `OrderbookSnapshot` objects from `orderbook_snapshots`
+- `DepthAwareExecutablePriceEstimator`: VWAP-based executable price from book depth
+- `DepthAwareFillSimulator`: fill probability and partial-fill risk from depth ratios
+- `OrderbookFetcher`: unified fetcher; returns `None` when `orderbook_enabled=False`
+- `SimulatorService.simulate_snapshot()`: snapshot path; `execution_model=degraded` when any leg is missing a snapshot
+- `CourtService.assess_with_snapshots()` / `evaluate_with_snapshots()`: snapshot-based court path with three extra gates: quote_staleness, depth_support, partial_fill_inversion
+- `PipelineRunner` wired: when `orderbook_enabled=True`, fetches snapshots per candidate leg and routes to `evaluate_with_snapshots()`; falls back to heuristic when disabled
+
+Migration chain: `0010_venue_tokens` → `0011_orderbook_snapshots` applied.
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
 - risk scoring is still a heuristic composite, even though it is now versioned and decomposed into a richer vector
 - court gating is structured and opportunity-aware, but still threshold-based
-- execution simulation models slippage and fill probability heuristically rather than from live orderbook replay
-- quote provenance is still heuristic metadata, not a captured live orderbook snapshot
+- execution simulation defaults to heuristic when `orderbook_enabled=False`; snapshot path available when enabled
+- orderbook snapshot path is not yet tested against live CLOB APIs; adapters are implemented and unit-tested with mocks
 - identity review queue ordering is rule-based rather than learned from a historical calibration model
 - policy recommendations are versioned and evidence-backed, but still heuristic rather than learned
 

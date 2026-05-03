@@ -17,6 +17,7 @@ from parallax.shared.schemas import (
     RiskScore,
     SimulationResult,
 )
+from parallax.execution.schemas import OrderbookSnapshot
 from parallax.simulator.service import SimulatorService
 
 _SEMANTIC_OPPORTUNITY_TYPES = {
@@ -50,11 +51,133 @@ class CourtService:
         return assessment
 
     def assess_with_simulation(self, candidate_id: str) -> tuple[CourtAssessment, SimulationResult]:
+        simulation = self._simulator.simulate(candidate_id)
+        return self._run_assessment(candidate_id, simulation)
+
+    def assess_with_snapshots(
+        self,
+        candidate_id: str,
+        snapshots: dict[str, OrderbookSnapshot | None],
+    ) -> tuple[CourtAssessment, SimulationResult]:
+        """Run assessment using snapshot-based simulation, with extra orderbook gates."""
+        simulation = self._simulator.simulate_snapshot(candidate_id, snapshots)
+        base_assessment, _ = self._run_assessment(candidate_id, simulation)
+
+        # Inject orderbook-specific gates
+        extra_gates, extra_reasons, downgrade = self._orderbook_gates(simulation)
+        gates = list(base_assessment.gates) + extra_gates
+        reasons = list(base_assessment.reasons) + extra_reasons
+        decision = base_assessment.decision
+        if downgrade and decision == CourtDecision.APPROVED:
+            decision = CourtDecision.WATCHLIST
+
+        assessment = CourtAssessment(
+            decision=decision,
+            simulated_pnl=base_assessment.simulated_pnl,
+            fill_probability=base_assessment.fill_probability,
+            composite_risk=base_assessment.composite_risk,
+            reasons=reasons,
+            opportunity_type=base_assessment.opportunity_type,
+            relation_type=base_assessment.relation_type,
+            risk_flags=list(simulation.risk_flags),
+            gates=gates,
+            policy_version="court-v2-snapshot",
+        )
+        return assessment, simulation
+
+    @staticmethod
+    def _orderbook_gates(
+        simulation: SimulationResult,
+    ) -> tuple[list[DecisionGate], list[str], bool]:
+        """Return extra gates, reasons, and whether to downgrade APPROVED → WATCHLIST."""
+        gates: list[DecisionGate] = []
+        reasons: list[str] = []
+        downgrade = False
+
+        staleness = simulation.quote_staleness_seconds
+        if staleness is not None:
+            threshold = settings.court_max_quote_staleness_seconds
+            if staleness > threshold:
+                gates.append(
+                    DecisionGate(
+                        name="quote_staleness",
+                        status="watchlist",
+                        observed=f"{staleness:.1f}s",
+                        threshold=f"<= {threshold:.0f}s",
+                        detail="snapshot is stale; executable price may not reflect current market",
+                    )
+                )
+                reasons.append(f"quote staleness {staleness:.1f}s exceeds threshold {threshold:.0f}s")
+                downgrade = True
+            else:
+                gates.append(
+                    DecisionGate(
+                        name="quote_staleness",
+                        status="pass",
+                        observed=f"{staleness:.1f}s",
+                        threshold=f"<= {threshold:.0f}s",
+                    )
+                )
+
+        if simulation.depth_support is not None:
+            if not simulation.depth_support:
+                gates.append(
+                    DecisionGate(
+                        name="depth_support",
+                        status="watchlist",
+                        observed="insufficient",
+                        threshold="full_fill_supported",
+                        detail="book depth does not support the required trade size",
+                    )
+                )
+                reasons.append("orderbook depth insufficient to support full fill")
+                downgrade = True
+            else:
+                gates.append(
+                    DecisionGate(
+                        name="depth_support",
+                        status="pass",
+                        observed="supported",
+                        threshold="full_fill_supported",
+                    )
+                )
+
+        partial_risk = simulation.partial_fill_risk
+        threshold_pf = settings.court_partial_fill_inversion_threshold
+        if partial_risk > threshold_pf:
+            gates.append(
+                DecisionGate(
+                    name="partial_fill_inversion",
+                    status="watchlist",
+                    observed=f"{partial_risk:.3f}",
+                    threshold=f"<= {threshold_pf:.3f}",
+                    detail="partial fill risk may invert payoff on incomplete execution",
+                )
+            )
+            reasons.append(f"partial fill inversion risk {partial_risk:.3f} exceeds threshold")
+            downgrade = True
+        else:
+            gates.append(
+                DecisionGate(
+                    name="partial_fill_inversion",
+                    status="pass",
+                    observed=f"{partial_risk:.3f}",
+                    threshold=f"<= {threshold_pf:.3f}",
+                )
+            )
+
+        return gates, reasons, downgrade
+
+    def _run_assessment(
+        self,
+        candidate_id: str,
+        simulation: SimulationResult,
+    ) -> tuple[CourtAssessment, SimulationResult]:
+        """Internal: run the assessment logic given a pre-computed simulation."""
         candidate = self._repo.get(candidate_id)
         if candidate is None:
             raise ValueError(f"Candidate {candidate_id} not found")
 
-        simulation = self._simulator.simulate(candidate_id)
         risk = RiskScore.model_validate(candidate.risk_scores) if candidate.risk_scores else None
         opportunity_type = OpportunityType(candidate.opportunity_type)
         markets = [
@@ -366,8 +489,27 @@ class CourtService:
         )
         return assessment, simulation
 
+    def evaluate_with_snapshots(
+        self,
+        candidate_id: str,
+        snapshots: dict[str, OrderbookSnapshot | None],
+        run_id: str | None = None,
+    ) -> CourtDecision:
+        """Evaluate using snapshot-based simulation; persist decision and snapshot."""
+        assessment, simulation = self.assess_with_snapshots(candidate_id, snapshots)
+        return self._persist_evaluation(candidate_id, assessment, simulation, run_id)
+
     def evaluate(self, candidate_id: str, run_id: str | None = None) -> CourtDecision:
         assessment, simulation = self.assess_with_simulation(candidate_id)
+        return self._persist_evaluation(candidate_id, assessment, simulation, run_id)
+
+    def _persist_evaluation(
+        self,
+        candidate_id: str,
+        assessment: CourtAssessment,
+        simulation: SimulationResult,
+        run_id: str | None,
+    ) -> CourtDecision:
         decision = assessment.decision
         self._repo.update_decision(candidate_id, decision)
         candidate = self._repo.get(candidate_id)

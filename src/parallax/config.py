@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     runtime_max_candidate_concurrency: int = 10
     persist_market_relations_compat: bool = False
 
+    # Orderbook reality layer
+    orderbook_enabled: bool = False
+    orderbook_snapshot_ttl_seconds: float = 45.0
+    orderbook_fetch_timeout_seconds: float = 5.0
+    court_max_quote_staleness_seconds: float = 60.0
+    court_min_depth_size: float = 10.0
+    court_partial_fill_inversion_threshold: float = 0.4
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @model_validator(mode="after")

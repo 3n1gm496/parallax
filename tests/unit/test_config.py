@@ -22,3 +22,14 @@ def test_settings_prefers_dotenv_secret_when_shell_value_is_redacted(monkeypatch
     settings = Settings()
 
     assert settings.anthropic_api_key == "sk-ant-real-key-1234567890"
+
+
+def test_orderbook_config_defaults():
+    from parallax.config import settings
+
+    assert settings.court_max_quote_staleness_seconds == 60.0
+    assert settings.court_min_depth_size == 10.0
+    assert settings.orderbook_snapshot_ttl_seconds == 45.0
+    assert settings.orderbook_fetch_timeout_seconds == 5.0
+    assert settings.orderbook_enabled is False
+    assert settings.court_partial_fill_inversion_threshold == 0.4
