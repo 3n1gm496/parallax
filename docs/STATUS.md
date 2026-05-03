@@ -114,6 +114,17 @@ Settled paper-position history now feeds back into the execution estimate when l
 
 The replay path only activates after sufficient settlement history accumulates (minimum 3 closed positions per opportunity type).
 
+## Automated Settlement Layer (Fase 6 — 2026-05-03)
+
+Open paper positions are now automatically settled when all underlying markets have closed with deterministic prices:
+
+- `SettlementScannerService` (`src/parallax/settlement/scanner.py`): scans `OPEN` paper positions each pipeline run; skips positions where any market is still open or has an ambiguous final price (0.1 < YES price < 0.9)
+- Resolution inference: `outcome_prices[0]` ≥ 0.9 → YES, ≤ 0.1 → NO, else ambiguous (manual settlement required)
+- PnL computation: per-leg win/loss from stored `legs_json`; normalized by `PayoffMatrix.total_cost`; clamped to [-1.0, 1.0]
+- Calls `TrackerService.close_position()` + `AutopsyService.record(resolution_type=CORRECT)` per settled position
+- `PipelineRunner.run_once()` invokes scanner after the candidate loop; scanner failures are caught and logged without aborting the run
+- `positions_settled` in `RunSummary` and `RunProofRecord` now reflects auto-settled positions
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
@@ -121,6 +132,7 @@ The replay path only activates after sufficient settlement history accumulates (
 - court `composite_risk` gate uses snapshot-adjusted composite when `orderbook_enabled=True`, detection-time composite otherwise
 - court gating is structured and opportunity-aware, but still threshold-based
 - execution simulation defaults to heuristic when `orderbook_enabled=False`; snapshot path available when enabled
+- settlement scanner only infers resolution from `outcome_prices[0]`; unusual oracle formats (multi-outcome, scaled) require manual settlement
 - orderbook snapshot path is not yet tested against live CLOB APIs; adapters are implemented and unit-tested with mocks
 - identity review queue ordering is rule-based rather than learned from a historical calibration model
 - policy recommendations are versioned and evidence-backed, but still heuristic rather than learned
