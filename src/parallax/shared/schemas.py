@@ -344,6 +344,29 @@ class RiskScore(BaseModel):
             policy_version=policy_version,
         )
 
+    @staticmethod
+    def adjust_from_simulation(base: "RiskScore", simulation: "SimulationResult") -> "RiskScore":
+        if simulation.execution_model != "snapshot_based":
+            return base
+        execution_risk = base.execution_risk
+        if simulation.depth_support is True:
+            execution_risk = round(max(0.0, execution_risk - 0.08), 4)
+        elif simulation.depth_support is False:
+            execution_risk = round(min(1.0, execution_risk + 0.30), 4)
+        liquidity_risk = base.liquidity_risk
+        if simulation.partial_fill_risk > 0:
+            liquidity_risk = round(max(base.liquidity_risk, simulation.partial_fill_risk * 0.8), 4)
+        return RiskScore.combine(
+            oracle=base.oracle_risk,
+            deadline=base.deadline_risk,
+            semantic=base.semantic_risk,
+            execution=execution_risk,
+            liquidity=liquidity_risk,
+            cancellation=base.cancellation_risk,
+            source_trust=base.source_trust_risk,
+            policy_version="risk-v2-snapshot",
+        )
+
 
 class SimulationResult(BaseModel):
     candidate_id: str
