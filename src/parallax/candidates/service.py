@@ -27,7 +27,25 @@ class CandidateReadService:
         self._court = CourtService(session)
 
     def list_open_summaries(self, *, limit: int = 100, offset: int = 0) -> list[CandidateSummary]:
+        from sqlalchemy import select
+        from parallax.db.models import CandidateDecisionSnapshot
+
         rows = self._repo.list_open(limit=limit, offset=offset)
+        if not rows:
+            return []
+
+        candidate_ids = [row.id for row in rows]
+        snap_rows = self._session.execute(
+            select(
+                CandidateDecisionSnapshot.candidate_id,
+                CandidateDecisionSnapshot.simulation_result,
+            ).where(CandidateDecisionSnapshot.candidate_id.in_(candidate_ids))
+        ).all()
+        em_by_id: dict[str, str | None] = {
+            str(cid): (sim.get("execution_model") if isinstance(sim, dict) else None)
+            for cid, sim in snap_rows
+        }
+
         return [
             CandidateSummary(
                 id=str(row.id),
@@ -36,6 +54,7 @@ class CandidateReadService:
                 total_cost=PayoffMatrix.model_validate(row.payoff_matrix).total_cost,
                 court_decision=CourtDecision(row.court_decision),
                 created_at=row.detected_at,
+                execution_model=em_by_id.get(str(row.id)),
             )
             for row in rows
         ]

@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from parallax.api.deps import get_read_session, require_read_access
+from parallax.ops.execution_report import ExecutionReportService
 from parallax.ops.schemas import (
     BacktestReplayReport,
     EvaluationReport,
+    ExecutionReport,
     IdentityReviewQueueResponse,
     OpsMetricsResponse,
     PolicyReport,
@@ -113,3 +115,11 @@ def get_relation_set(
     if payload is None:
         raise HTTPException(status_code=404, detail="Relation set not found")
     return payload
+
+
+@router.get("/ops/execution", response_model=ExecutionReport)
+def get_execution_report(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> ExecutionReport:
+    return ExecutionReportService.build(session)

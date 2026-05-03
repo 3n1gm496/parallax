@@ -77,6 +77,17 @@ Migration chain: `0010_venue_tokens` → `0011_orderbook_snapshots` applied.
 - Kalshi orderbook path does not require token IDs (ticker = market_id directly)
 - The `evaluate_with_snapshots` path is now end-to-end reachable when `orderbook_enabled=True` and Polymarket markets have been ingested
 
+## Execution Observability Layer (Fase 3 — 2026-05-03)
+
+The snapshot execution path is now visible across the ops surface, readiness report, and UI:
+
+- `GET /api/ops/execution`: `ExecutionReport` with `venue_tokens` coverage by platform, `orderbook_snapshots` stats, execution_model distribution from last 500 decision snapshots, avg quote staleness, depth support rate
+- `ReadinessReport` carries `orderbook_enabled` and `venue_token_count`
+- `CandidateSummary` carries `execution_model` (batch-loaded from decision snapshots, no N+1)
+- `CandidateDetail.tsx`: Execution section renders `execution_model`, `depth_support`, `quote_staleness_seconds`, `partial_fill_risk`
+- `OperationsView.tsx`: Execution Coverage panel fetches `/api/ops/execution` and shows per-platform token/snapshot counts, staleness, and model distribution
+- Frontend `SimulationResult` and `CandidateSummary` types updated to carry new fields
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system

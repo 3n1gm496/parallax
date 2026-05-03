@@ -14,6 +14,7 @@ from parallax.api.routes.markets import get_market, list_markets
 from parallax.api.routes.ops import (
     get_backtest_replay,
     get_evaluation_report,
+    get_execution_report,
     get_identity_review_queue,
     get_ops_metrics,
     get_policy_report,
@@ -808,3 +809,47 @@ def test_read_access_requires_token_when_enabled():
     finally:
         settings.api_auth_token = original_token
         settings.api_require_auth_for_reads = original_require_reads
+
+
+def test_ops_execution_route_returns_report():
+    from parallax.ops.schemas import ExecutionReport
+    session = MagicMock()
+    mock_report = ExecutionReport(
+        orderbook_enabled=False,
+        coverage=[],
+        total_venue_tokens=0,
+        total_snapshots=0,
+        execution_model_distribution={},
+    )
+    with patch("parallax.api.routes.ops.ExecutionReportService") as mock_svc:
+        mock_svc.build.return_value = mock_report
+        result = get_execution_report(session=session)
+    assert result.orderbook_enabled is False
+    assert result.total_venue_tokens == 0
+
+
+def test_candidate_summary_includes_execution_model():
+    from parallax.shared.schemas import CandidateSummary, CourtDecision, OpportunityType
+    summary = CandidateSummary(
+        id="cand-1",
+        opportunity_type=OpportunityType.PURE_ARBITRAGE,
+        worst_case_payoff=0.05,
+        total_cost=45.0,
+        court_decision=CourtDecision.WATCHLIST,
+        created_at=datetime.now(timezone.utc),
+        execution_model="snapshot_based",
+    )
+    assert summary.execution_model == "snapshot_based"
+
+
+def test_candidate_summary_execution_model_defaults_none():
+    from parallax.shared.schemas import CandidateSummary, CourtDecision, OpportunityType
+    summary = CandidateSummary(
+        id="cand-1",
+        opportunity_type=OpportunityType.PURE_ARBITRAGE,
+        worst_case_payoff=0.05,
+        total_cost=45.0,
+        court_decision=CourtDecision.WATCHLIST,
+        created_at=datetime.now(timezone.utc),
+    )
+    assert summary.execution_model is None

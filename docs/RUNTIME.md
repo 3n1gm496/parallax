@@ -111,6 +111,7 @@ Read routes:
 - `GET /api/ops/identity-review`
 - `GET /api/ops/relation-sets`
 - `GET /api/ops/relation-sets/{set_key}`
+- `GET /api/ops/execution`
 - `GET /api/positions`
 - `GET /api/positions/{position_id}`
 
@@ -165,6 +166,13 @@ It exposes:
 - member market ids
 - set-level proof status and tradeability
 - semantic pair reviews and raw evidence
+
+`GET /api/ops/execution` exposes a live execution coverage report:
+
+- `orderbook_enabled` flag from current settings
+- per-platform `venue_tokens` count and `orderbook_snapshots` count with latest snapshot timestamp
+- execution model distribution from last 500 persisted decision snapshots
+- average quote staleness and depth support rate when snapshot path has fired
 
 `GET /api/ops/runs` and `GET /api/ops/runs/{run_id}` expose persisted run proofs with:
 

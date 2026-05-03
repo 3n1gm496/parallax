@@ -86,6 +86,8 @@ class ReadinessReport(BaseModel):
     degraded_reasons: list[str] = Field(default_factory=list)
     controls: RuntimeControlState
     checks: dict[str, object]
+    orderbook_enabled: bool = False
+    venue_token_count: int = 0
 
 
 class OpsActivityMetric(BaseModel):
@@ -271,3 +273,21 @@ class OpsMetricsResponse(BaseModel):
     calibration: CalibrationOpsMetrics
     evaluation: EvaluationOpsMetrics
     relation_quality: RelationQualityOpsMetrics
+
+
+class ExecutionCoverageStats(BaseModel):
+    platform: str
+    venue_token_count: int
+    snapshot_count: int
+    latest_snapshot_at: datetime | None = None
+
+
+class ExecutionReport(BaseModel):
+    orderbook_enabled: bool
+    coverage: list[ExecutionCoverageStats]
+    total_venue_tokens: int
+    total_snapshots: int
+    execution_model_distribution: dict[str, int]
+    avg_quote_staleness_seconds: float | None = None
+    depth_support_rate: float | None = None
+    report_basis: str = "last_500_evaluations"

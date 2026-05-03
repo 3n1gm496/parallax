@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from parallax.config import settings
-from parallax.db.models import RawMarket
+from parallax.db.models import RawMarket, VenueToken
 from parallax.ops.schemas import ReadinessReport, RuntimeControlState
 
 
@@ -113,6 +113,10 @@ def build_readiness_payload(session: Session) -> ReadinessReport:
         degraded = True
         degraded_reasons.append("runtime is in degraded read-only mode")
 
+    venue_token_count = session.execute(
+        select(func.count(VenueToken.id))
+    ).scalar_one() or 0
+
     return ReadinessReport(
         status="ready" if not degraded else "degraded",
         database="ok",
@@ -122,6 +126,8 @@ def build_readiness_payload(session: Session) -> ReadinessReport:
             "semantic_analysis": semantic_check,
             "providers": provider_checks,
         },
+        orderbook_enabled=settings.orderbook_enabled,
+        venue_token_count=venue_token_count,
     )
 
 

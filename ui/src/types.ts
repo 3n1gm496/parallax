@@ -57,6 +57,11 @@ export interface SimulationResult {
   risk_flags: string[];
   venue_breakdown: Record<string, unknown>;
   model_version: string;
+  execution_model: "heuristic" | "snapshot_based" | "replay_based" | "degraded";
+  quote_staleness_seconds: number | null;
+  snapshot_ids: string[];
+  depth_support: boolean | null;
+  partial_fill_risk: number;
 }
 
 export interface DecisionGate {
@@ -130,6 +135,7 @@ export interface CandidateSummary {
   total_cost: number;
   court_decision: string;
   created_at: string;
+  execution_model: string | null;
 }
 
 export interface MarketSummary {
@@ -483,4 +489,24 @@ export interface ReadinessReport {
     semantic_analysis: ReadinessCheck;
     providers: Record<string, ReadinessCheck>;
   };
+  orderbook_enabled: boolean;
+  venue_token_count: number;
+}
+
+export interface ExecutionCoverageStats {
+  platform: string;
+  venue_token_count: number;
+  snapshot_count: number;
+  latest_snapshot_at: string | null;
+}
+
+export interface ExecutionReport {
+  orderbook_enabled: boolean;
+  coverage: ExecutionCoverageStats[];
+  total_venue_tokens: number;
+  total_snapshots: number;
+  execution_model_distribution: Record<string, number>;
+  avg_quote_staleness_seconds: number | null;
+  depth_support_rate: number | null;
+  report_basis: string;
 }

@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import type {
   BacktestReplayReport,
   EvaluationReport,
+  ExecutionReport,
   IdentityReviewQueueResponse,
   LogicalRelationSet,
   OpsMetrics,
@@ -61,6 +62,7 @@ export function OperationsView() {
   const [policy, setPolicy] = useState<PolicyReport | null>(null);
   const [identityReview, setIdentityReview] = useState<IdentityReviewQueueResponse | null>(null);
   const [backtest, setBacktest] = useState<BacktestReplayReport | null>(null);
+  const [execReport, setExecReport] = useState<ExecutionReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -75,7 +77,8 @@ export function OperationsView() {
       api.ops.policy(),
       api.ops.identityReview(),
       api.ops.backtest(),
-    ]).then(([metricsPayload, readinessPayload, runsPayload, evaluationPayload, relationSetPayload, policyPayload, identityReviewPayload, backtestPayload]) => {
+      api.ops.execution(),
+    ]).then(([metricsPayload, readinessPayload, runsPayload, evaluationPayload, relationSetPayload, policyPayload, identityReviewPayload, backtestPayload, execPayload]) => {
         if (!cancelled) {
           setMetrics(metricsPayload);
           setReadiness(readinessPayload);
@@ -85,6 +88,7 @@ export function OperationsView() {
           setPolicy(policyPayload);
           setIdentityReview(identityReviewPayload);
           setBacktest(backtestPayload);
+          setExecReport(execPayload);
         }
       })
       .catch((e: unknown) => {
@@ -577,6 +581,44 @@ export function OperationsView() {
           </div>
         </div>
       </section>
+
+      {execReport && (
+        <section style={panelStyle}>
+          <h3 style={{ marginTop: 0 }}>Execution Coverage</h3>
+          <div style={{ color: execReport.orderbook_enabled ? "#6ddc9b" : "#9fb4ca", marginBottom: 10 }}>
+            orderbook {execReport.orderbook_enabled ? "enabled" : "disabled"} · {execReport.total_venue_tokens} tokens · {execReport.total_snapshots} snapshots
+          </div>
+          {execReport.coverage.map((c) => (
+            <div key={c.platform} style={{ marginBottom: 6 }}>
+              <span style={{ color: "#bfd3ea" }}>{c.platform}</span>
+              {" — "}
+              <span style={{ color: "#9fb4ca" }}>{c.venue_token_count} tokens · {c.snapshot_count} snapshots</span>
+              {c.latest_snapshot_at && (
+                <span style={{ color: "#6b829a", marginLeft: 8 }}>
+                  last {new Date(c.latest_snapshot_at).toLocaleString()}
+                </span>
+              )}
+            </div>
+          ))}
+          {Object.keys(execReport.execution_model_distribution).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ color: "#86a0b8", fontSize: 11, marginBottom: 6, letterSpacing: "0.08em" }}>EXECUTION MODEL DISTRIBUTION</div>
+              {Object.entries(execReport.execution_model_distribution).map(([model, count]) => (
+                <div key={model} style={{ display: "flex", justifyContent: "space-between", color: "#9fb4ca", marginBottom: 4 }}>
+                  <span>{model}</span>
+                  <strong style={{ color: "#dce7f5" }}>{count}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+          {execReport.avg_quote_staleness_seconds !== null && (
+            <div style={{ color: "#9fb4ca", marginTop: 8 }}>
+              avg staleness {execReport.avg_quote_staleness_seconds.toFixed(1)}s
+              {execReport.depth_support_rate !== null && ` · depth support ${(execReport.depth_support_rate * 100).toFixed(0)}%`}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

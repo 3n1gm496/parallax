@@ -124,6 +124,16 @@ export function CandidateDetail({ candidateId, onClose }: Props) {
                 <Metric label="Execution quality" value={simulation.execution_quality} />
                 <Metric label="Slippage" value={`${simulation.estimated_slippage_bps} bps`} />
                 <Metric label="Model" value={simulation.model_version} />
+                <Metric label="Exec model" value={simulation.execution_model ?? "heuristic"} />
+                {simulation.depth_support !== null && simulation.depth_support !== undefined && (
+                  <Metric label="Depth support" value={simulation.depth_support ? "yes" : "no"} />
+                )}
+                {simulation.quote_staleness_seconds !== null && simulation.quote_staleness_seconds !== undefined && (
+                  <Metric label="Quote age" value={`${simulation.quote_staleness_seconds.toFixed(1)}s`} />
+                )}
+                {simulation.partial_fill_risk > 0 && (
+                  <Metric label="Partial fill risk" value={`${(simulation.partial_fill_risk * 100).toFixed(1)}%`} />
+                )}
                 <div style={{ color: "#bfd3ea", marginBottom: 8 }}>
                   drag: spread {simulation.spread_cross_cost.toFixed(4)} · stale {simulation.stale_quote_cost.toFixed(4)} · partial{" "}
                   {simulation.partial_fill_cost.toFixed(4)} · non-execution {simulation.non_execution_cost.toFixed(4)}

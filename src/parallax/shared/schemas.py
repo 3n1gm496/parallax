@@ -450,6 +450,7 @@ class CandidateSummary(BaseModel):
     total_cost: float
     court_decision: CourtDecision
     created_at: datetime
+    execution_model: Literal["heuristic", "snapshot_based", "replay_based", "degraded"] | None = None
 
 
 class DecisionSnapshot(BaseModel):
