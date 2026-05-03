@@ -787,3 +787,81 @@ def _build_identity_review_queue(session: Session, limit: int = 100) -> Identity
         )
     )
     return IdentityReviewQueueResponse(generated_at=datetime.now(timezone.utc), items=items[:limit])
+
+
+def get_proof_bundle_payload(session: Session) -> "ProofBundleReport":
+    from parallax.ops.runtime import build_readiness_payload
+    from parallax.ops.schemas import ProofBundleReport, ProofCheckItem
+
+    readiness = build_readiness_payload(session)
+    runs = list_run_proofs_payload(session, limit=1).runs
+    latest_run = runs[0] if runs else None
+    metrics = get_ops_metrics_payload(session)
+
+    market_counts = metrics.market_counts_by_platform
+    total_markets = sum(market_counts.values())
+    total_candidates = sum(metrics.candidate_counts_by_decision.values())
+    open_positions = metrics.open_positions
+
+    contracts_compiled = latest_run.contracts_compiled if latest_run else 0
+    relations_detected = latest_run.relations_detected if latest_run else 0
+
+    semantic_check = readiness.checks.get("semantic") or {}
+    semantic_status = (
+        semantic_check.get("status", "unknown")
+        if isinstance(semantic_check, dict)
+        else getattr(semantic_check, "status", "unknown")
+    )
+
+    checklist = [
+        ProofCheckItem(
+            name="database_ok",
+            passed=readiness.database == "ok",
+            evidence=f"database={readiness.database}",
+        ),
+        ProofCheckItem(
+            name="polymarket_ingested",
+            passed=market_counts.get("polymarket", 0) > 0,
+            evidence=f"{market_counts.get('polymarket', 0)} polymarket markets",
+        ),
+        ProofCheckItem(
+            name="kalshi_ingested",
+            passed=market_counts.get("kalshi", 0) > 0,
+            evidence=f"{market_counts.get('kalshi', 0)} kalshi markets",
+        ),
+        ProofCheckItem(
+            name="compilation_ran",
+            passed=contracts_compiled > 0,
+            evidence=f"{contracts_compiled} contracts compiled in last run",
+        ),
+        ProofCheckItem(
+            name="relations_detected",
+            passed=relations_detected > 0,
+            evidence=f"{relations_detected} relations in last run",
+        ),
+        ProofCheckItem(
+            name="run_proof_exists",
+            passed=latest_run is not None,
+            evidence="run persisted" if latest_run else "no run proof found",
+        ),
+        ProofCheckItem(
+            name="semantic_ok",
+            passed=semantic_status == "ok",
+            evidence=f"semantic: {semantic_status}",
+        ),
+    ]
+
+    all_pass = all(item.passed for item in checklist)
+    return ProofBundleReport(
+        captured_at=datetime.now(timezone.utc),
+        readiness_status=readiness.status,
+        market_counts_by_platform=market_counts,
+        total_markets=total_markets,
+        total_candidates=total_candidates,
+        open_positions=open_positions,
+        contracts_compiled_last_run=contracts_compiled,
+        relations_detected_last_run=relations_detected,
+        run_proof_exists=latest_run is not None,
+        proof_checklist=checklist,
+        bundle_status="complete" if all_pass else "partial",
+    )

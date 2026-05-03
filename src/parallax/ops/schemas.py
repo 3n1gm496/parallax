@@ -291,3 +291,24 @@ class ExecutionReport(BaseModel):
     avg_quote_staleness_seconds: float | None = None
     depth_support_rate: float | None = None
     report_basis: str = "last_500_evaluations"
+
+
+class ProofCheckItem(BaseModel):
+    name: str
+    passed: bool
+    evidence: str
+
+
+class ProofBundleReport(BaseModel):
+    captured_at: datetime
+    readiness_status: str
+    market_counts_by_platform: dict[str, int] = Field(default_factory=dict)
+    total_markets: int = 0
+    total_candidates: int = 0
+    open_positions: int = 0
+    contracts_compiled_last_run: int = 0
+    relations_detected_last_run: int = 0
+    run_proof_exists: bool = False
+    proof_checklist: list[ProofCheckItem] = Field(default_factory=list)
+    bundle_status: str = "partial"
+    bundle_version: str = "proof-bundle-v1"

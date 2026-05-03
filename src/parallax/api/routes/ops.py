@@ -12,6 +12,7 @@ from parallax.ops.schemas import (
     IdentityReviewQueueResponse,
     OpsMetricsResponse,
     PolicyReport,
+    ProofBundleReport,
     RelationSetListResponse,
     RunProof,
     RunProofListResponse,
@@ -22,6 +23,7 @@ from parallax.ops.service import (
     get_evaluation_report_payload,
     get_identity_review_queue_payload,
     get_ops_metrics_payload,
+    get_proof_bundle_payload,
     get_relation_set_payload,
     get_run_proof_payload,
     list_relation_sets_payload,
@@ -123,3 +125,11 @@ def get_execution_report(
     session: Session = Depends(get_read_session),
 ) -> ExecutionReport:
     return ExecutionReportService.build(session)
+
+
+@router.get("/ops/proof", response_model=ProofBundleReport)
+def get_proof_bundle(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> ProofBundleReport:
+    return get_proof_bundle_payload(session)

@@ -18,6 +18,7 @@ from parallax.api.routes.ops import (
     get_identity_review_queue,
     get_ops_metrics,
     get_policy_report,
+    get_proof_bundle,
     get_relation_set,
     get_run_proof,
     list_relation_sets,
@@ -853,3 +854,38 @@ def test_candidate_summary_execution_model_defaults_none():
         created_at=datetime.now(timezone.utc),
     )
     assert summary.execution_model is None
+
+
+def test_get_proof_bundle_returns_payload():
+    from parallax.api.routes.ops import get_proof_bundle
+    from parallax.ops.schemas import ProofBundleReport, ProofCheckItem
+
+    session = MagicMock()
+    bundle = ProofBundleReport(
+        captured_at=datetime.now(timezone.utc),
+        readiness_status="ok",
+        market_counts_by_platform={"polymarket": 5, "kalshi": 3},
+        total_markets=8,
+        total_candidates=2,
+        open_positions=1,
+        contracts_compiled_last_run=4,
+        relations_detected_last_run=3,
+        run_proof_exists=True,
+        proof_checklist=[
+            ProofCheckItem(name="database_ok", passed=True, evidence="database=ok"),
+            ProofCheckItem(name="polymarket_ingested", passed=True, evidence="5 markets"),
+            ProofCheckItem(name="kalshi_ingested", passed=True, evidence="3 markets"),
+            ProofCheckItem(name="compilation_ran", passed=True, evidence="4 contracts"),
+            ProofCheckItem(name="relations_detected", passed=True, evidence="3 relations"),
+            ProofCheckItem(name="run_proof_exists", passed=True, evidence="run persisted"),
+            ProofCheckItem(name="semantic_ok", passed=False, evidence="semantic: not configured"),
+        ],
+        bundle_status="partial",
+    )
+
+    with patch("parallax.api.routes.ops.get_proof_bundle_payload", return_value=bundle):
+        result = get_proof_bundle(session=session)
+
+    assert result.bundle_status == "partial"
+    assert len(result.proof_checklist) == 7
+    assert result.proof_checklist[0].name == "database_ok"
