@@ -12,6 +12,9 @@ from parallax.db.models import (
     AutopsyRecord,
     CandidateDecisionSnapshot,
     CounterexampleRecord,
+    EventIdentityCluster,
+    IdentityClusterMember,
+    IdentityMetric,
     LogicalRelation,
     LogicalRelationSet,
     OpportunityCandidate,
@@ -29,6 +32,9 @@ from parallax.ops.schemas import (
     CalibrationOpsMetrics,
     EvaluationOpsMetrics,
     EvaluationReport,
+    IdentityClusterEntry,
+    IdentityClusterQueueResponse,
+    IdentityMetricsReport,
     IdentityReviewQueueEntry,
     IdentityReviewQueueResponse,
     OpsMetricsResponse,
@@ -328,6 +334,67 @@ def get_backtest_replay_payload(session: Session, *, limit: int = 100) -> Backte
 
 def get_identity_review_queue_payload(session: Session, *, limit: int = 100) -> IdentityReviewQueueResponse:
     return _build_identity_review_queue(session, limit=limit)
+
+
+def get_identity_cluster_queue(session: Session, *, limit: int = 100) -> IdentityClusterQueueResponse:
+    clusters = (
+        session.query(EventIdentityCluster)
+        .filter(EventIdentityCluster.status == "active")
+        .order_by(EventIdentityCluster.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    entries: list[IdentityClusterEntry] = []
+    for cluster in clusters:
+        member_count = session.query(IdentityClusterMember).filter_by(cluster_id=cluster.id).count()
+        primary_member = (
+            session.query(IdentityClusterMember)
+            .filter_by(cluster_id=cluster.id, member_role="primary")
+            .first()
+        )
+        primary_market_id = None
+        primary_market_title = None
+        if primary_member and primary_member.raw_market_id:
+            market = session.get(RawMarket, primary_member.raw_market_id)
+            if market is not None:
+                primary_market_id = market.id
+                primary_market_title = market.title
+        entries.append(
+            IdentityClusterEntry(
+                cluster_id=str(cluster.id),
+                cluster_key=cluster.cluster_key,
+                identity_type=cluster.identity_type,
+                status=cluster.status,
+                confidence=cluster.confidence,
+                member_count=member_count,
+                primary_market_id=primary_market_id,
+                primary_market_title=primary_market_title,
+                created_at=cluster.created_at,
+            )
+        )
+    return IdentityClusterQueueResponse(
+        generated_at=datetime.now(timezone.utc),
+        clusters=entries,
+        total=len(entries),
+    )
+
+
+def get_identity_metrics_report(session: Session) -> IdentityMetricsReport:
+    latest = session.query(IdentityMetric).order_by(IdentityMetric.computed_at.desc()).first()
+    if latest is None:
+        return IdentityMetricsReport(computed_at=None, scorer_version="identity-v3")
+    payload = latest.metrics_json or {}
+    return IdentityMetricsReport(
+        computed_at=latest.computed_at,
+        scorer_version=latest.scorer_version,
+        cluster_count=latest.cluster_count,
+        verified_count=latest.verified_count,
+        ambiguous_count=latest.ambiguous_count,
+        benchmark_accuracy=latest.benchmark_accuracy,
+        benchmark_total=int(payload.get("benchmark_total", 0)),
+        benchmark_correct=int(payload.get("benchmark_correct", 0)),
+        benchmark_wrong=int(payload.get("benchmark_wrong", 0)),
+    )
 
 
 def list_relation_sets_payload(

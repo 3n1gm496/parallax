@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "../api/client";
+import { IdentityClusterReview } from "./IdentityClusterReview";
 import type {
   BacktestReplayReport,
   EvaluationReport,
@@ -134,6 +135,8 @@ export function OperationsView() {
           </div>
         ))}
       </section>
+
+      <IdentityClusterReview />
 
       <section
         style={{

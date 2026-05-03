@@ -368,3 +368,164 @@ class OrderbookSnapshotRecord(Base):
     __table_args__ = (
         Index("ix_orderbook_snapshots_market_captured", "raw_market_id", "captured_at"),
     )
+
+
+class CanonicalEntity(Base):
+    __tablename__ = "canonical_entities"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text)
+    normalized_name: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    entity_type: Mapped[str] = mapped_column(String(100), default="unknown", index=True)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+
+
+class CanonicalSource(Base):
+    __tablename__ = "canonical_sources"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text)
+    normalized_name: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    source_type: Mapped[str] = mapped_column(String(100), default="unknown", index=True)
+    trust_level: Mapped[float] = mapped_column(Float, default=0.5)
+    aliases: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class CanonicalDeadline(Base):
+    __tablename__ = "canonical_deadlines"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    bucket_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    resolution_date: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    deadline_type: Mapped[str] = mapped_column(String(50), default="exact")
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class EventTemplate(Base):
+    __tablename__ = "event_templates"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    family_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    predicate_template: Mapped[str] = mapped_column(Text)
+    canonical_predicate: Mapped[str] = mapped_column(String(100), index=True)
+    example_titles: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+
+
+class EventIdentityCluster(Base):
+    __tablename__ = "event_identity_clusters"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cluster_key: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    identity_type: Mapped[str] = mapped_column(String(100), index=True)
+    primary_canonical_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("canonical_events.id"),
+        nullable=True,
+        index=True,
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence_version: Mapped[str] = mapped_column(String(100), default="identity-v3")
+    status: Mapped[str] = mapped_column(String(50), default="active", index=True)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+
+    __table_args__ = (
+        Index("ix_event_identity_clusters_type_status", "identity_type", "status"),
+    )
+
+
+class IdentityClusterMember(Base):
+    __tablename__ = "identity_cluster_members"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cluster_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("event_identity_clusters.id"), index=True)
+    canonical_event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("canonical_events.id"), index=True)
+    raw_market_id: Mapped[str | None] = mapped_column(ForeignKey("raw_markets.id"), nullable=True, index=True)
+    member_role: Mapped[str] = mapped_column(String(50), default="secondary")
+    added_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    added_by: Mapped[str] = mapped_column(String(100), default="system")
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint("cluster_id", "canonical_event_id", name="uq_cluster_member"),
+        Index("ix_identity_cluster_members_cluster", "cluster_id", "added_at"),
+    )
+
+
+class IdentitySplitMergeHistory(Base):
+    __tablename__ = "identity_split_merge_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    action: Mapped[str] = mapped_column(String(50), index=True)
+    source_cluster_ids: Mapped[list] = mapped_column(JSON)
+    target_cluster_ids: Mapped[list] = mapped_column(JSON)
+    triggered_by: Mapped[str] = mapped_column(String(100))
+    reason: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    acted_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+
+
+class IdentityReviewActionRecord(Base):
+    __tablename__ = "identity_review_actions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    cluster_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("event_identity_clusters.id"), index=True)
+    action: Mapped[str] = mapped_column(String(50), index=True)
+    reviewer: Mapped[str] = mapped_column(String(100))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    acted_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+
+
+class IdentityTrainingExample(Base):
+    __tablename__ = "identity_training_examples"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    market_id_a: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), index=True)
+    market_id_b: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), index=True)
+    label: Mapped[str] = mapped_column(String(50))
+    identity_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    labeler: Mapped[str] = mapped_column(String(100))
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+    __table_args__ = (
+        UniqueConstraint("market_id_a", "market_id_b", name="uq_training_example_pair"),
+    )
+
+
+class IdentityBenchmarkCase(Base):
+    __tablename__ = "identity_benchmark_cases"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    market_id_a: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), index=True)
+    market_id_b: Mapped[str] = mapped_column(ForeignKey("raw_markets.id"), index=True)
+    expected_label: Mapped[str] = mapped_column(String(50))
+    expected_identity_type: Mapped[str] = mapped_column(String(100))
+    difficulty: Mapped[str] = mapped_column(String(50), default="medium")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class IdentityMetric(Base):
+    __tablename__ = "identity_metrics"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    computed_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    scorer_version: Mapped[str] = mapped_column(String(100))
+    precision: Mapped[float | None] = mapped_column(Float, nullable=True)
+    recall: Mapped[float | None] = mapped_column(Float, nullable=True)
+    f1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    false_merge_count: Mapped[int] = mapped_column(Integer, default=0)
+    false_split_count: Mapped[int] = mapped_column(Integer, default=0)
+    ambiguous_count: Mapped[int] = mapped_column(Integer, default=0)
+    verified_count: Mapped[int] = mapped_column(Integer, default=0)
+    cluster_count: Mapped[int] = mapped_column(Integer, default=0)
+    benchmark_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)

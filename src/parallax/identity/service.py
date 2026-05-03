@@ -3,13 +3,14 @@ import re
 import uuid
 from sqlalchemy.orm import Session
 from parallax.audit.service import AuditService
-from parallax.db.models import CanonicalEvent, IdentityMatchReview, MarketEventLink
+from parallax.db.models import CanonicalEvent, EventIdentityCluster, IdentityMatchReview, MarketEventLink
+from parallax.identity.cluster_engine import ClusterEngine
 from parallax.identity.event_repository import EventRepository
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.shared.schemas import IdentityResolutionStatus
 
 
-_IDENTITY_SCORER_VERSION = "identity-v2"
+_IDENTITY_SCORER_VERSION = "identity-v3"
 _IDENTITY_MIN_VERIFIED_SCORE = 0.75
 _IDENTITY_AMBIGUITY_GAP = 0.1
 
@@ -22,6 +23,7 @@ class IdentityService:
         self._repo = EventRepository(session)
         self._market_repo = MarketRepository(session)
         self._audit = AuditService(session)
+        self._cluster_engine = ClusterEngine(session)
 
     def get_or_create_event(
         self,
@@ -176,6 +178,13 @@ class IdentityService:
                 link_reason=link_reason,
                 provenance=provenance,
             )
+            self._resolve_with_cluster(
+                market,
+                event.id,
+                link_reason=link_reason,
+                score=review["selected_score"] if "review" in locals() and review.get("selected_score") is not None else 1.0,
+                signals=provenance,
+            )
             if link is not None:
                 touched_event_ids.add(event.id)
                 self._audit.record(
@@ -216,6 +225,39 @@ class IdentityService:
         row.scorer_version = _IDENTITY_SCORER_VERSION
         row.review_payload = review_payload
         self._session.flush()
+
+    def _resolve_with_cluster(
+        self,
+        market,
+        canonical_event_id: uuid.UUID,
+        *,
+        link_reason: str,
+        score: float,
+        signals: dict,
+    ) -> None:
+        cluster = self._cluster_engine.find_or_create_singleton_cluster(
+            canonical_event_id=canonical_event_id,
+            raw_market_id=market.id,
+        )
+        candidate_clusters = (
+            self._session.query(EventIdentityCluster)
+            .filter(EventIdentityCluster.status == "active", EventIdentityCluster.id != cluster.id)
+            .all()
+        )
+        decision = self._cluster_engine.find_best_cluster_match(market, candidate_clusters)
+        if decision is None:
+            return
+        self._cluster_engine.add_member_to_cluster(
+            decision.cluster_id,
+            canonical_event_id,
+            market.id,
+            evidence={
+                **decision.provenance,
+                "link_reason": link_reason,
+                "legacy_score": score,
+                "legacy_signals": signals,
+            },
+        )
 
     def _match_existing_event(self, market, domain: str) -> dict:
         candidates: list[tuple[float, CanonicalEvent, dict]] = []

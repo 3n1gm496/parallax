@@ -217,6 +217,50 @@ class IdentityReviewQueueResponse(BaseModel):
     queue_version: str = "identity-review-v1"
 
 
+class IdentityClusterEntry(BaseModel):
+    cluster_id: str
+    cluster_key: str
+    identity_type: str
+    status: str
+    confidence: float
+    member_count: int
+    primary_market_id: str | None = None
+    primary_market_title: str | None = None
+    created_at: datetime
+
+
+class IdentityClusterQueueResponse(BaseModel):
+    generated_at: datetime
+    clusters: list[IdentityClusterEntry] = Field(default_factory=list)
+    total: int = 0
+
+
+class IdentityMetricsReport(BaseModel):
+    computed_at: datetime | None = None
+    scorer_version: str
+    cluster_count: int = 0
+    verified_count: int = 0
+    ambiguous_count: int = 0
+    benchmark_accuracy: float | None = None
+    benchmark_total: int = 0
+    benchmark_correct: int = 0
+    benchmark_wrong: int = 0
+
+
+class SplitClusterRequest(BaseModel):
+    split_a_member_ids: list[str]
+    split_b_member_ids: list[str]
+    reason: str
+    triggered_by: str = "operator"
+
+
+class MergeClustersRequest(BaseModel):
+    source_cluster_ids: list[str]
+    reason: str
+    triggered_by: str = "operator"
+    identity_type: str = "same_event"
+
+
 class RelationSetListResponse(BaseModel):
     items: list[LogicalRelationSetSchema] = Field(default_factory=list)
 

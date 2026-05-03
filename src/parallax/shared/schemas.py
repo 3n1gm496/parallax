@@ -76,6 +76,40 @@ class IdentityResolutionStatus(str, Enum):
     REJECTED = "rejected"
 
 
+class IdentityType(str, Enum):
+    SAME_EVENT = "same_event"
+    DUPLICATE_MARKET = "duplicate_market"
+    NEAR_DUPLICATE = "near_duplicate"
+    SUBSET = "subset"
+    SUPERSET = "superset"
+    SAME_EVENT_DIFF_SOURCE = "same_event_diff_source"
+    SAME_EVENT_DIFF_ORACLE = "same_event_diff_oracle"
+    SAME_EVENT_DIFF_DEADLINE = "same_event_diff_deadline"
+    CORRELATED = "correlated"
+    FALSE_EQUIVALENCE = "false_equivalence"
+
+
+class IdentityClusterStatus(str, Enum):
+    ACTIVE = "active"
+    SPLIT = "split"
+    MERGED_INTO = "merged_into"
+    ARCHIVED = "archived"
+
+
+class ClusterMemberRole(str, Enum):
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
+
+
+class IdentityReviewAction(str, Enum):
+    CONFIRM = "confirm"
+    REJECT = "reject"
+    SPLIT = "split"
+    MERGE = "merge"
+    ABSTAIN = "abstain"
+    ESCALATE = "escalate"
+
+
 class RawMarketData(BaseModel):
     platform: str
     market_id: str
