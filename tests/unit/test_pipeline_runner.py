@@ -377,3 +377,106 @@ class TestPipelineRunner:
 
         MockCourt.return_value.evaluate.assert_called_once()
         MockCourt.return_value.evaluate_with_replay.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_run_once_settles_closed_positions(self):
+        """Scanner settles positions and positions_settled counter is incremented."""
+        session = MagicMock()
+        session.commit = MagicMock()
+        session.begin_nested.side_effect = self._nested_tx
+
+        with (
+            patch("parallax.pipeline.runner.settings") as mock_settings,
+            patch("parallax.pipeline.runner.build_readiness_payload") as mock_readiness,
+            patch("parallax.pipeline.runner.MarketRepository") as MockMarket,
+            patch("parallax.pipeline.runner.PostgresGraphRepository"),
+            patch("parallax.pipeline.runner.AuditService"),
+            patch("parallax.pipeline.runner.IdentityService") as MockIdentity,
+            patch("parallax.pipeline.runner.RelationAnalysisService") as MockRelationService,
+            patch("parallax.pipeline.runner.DivergenceService") as MockDivergence,
+            patch("parallax.pipeline.runner.CandidateRepository") as MockCandidates,
+            patch("parallax.pipeline.runner.CourtService"),
+            patch("parallax.pipeline.runner.TrackerService"),
+            patch("parallax.pipeline.runner.CompilerService") as MockCompiler,
+            patch("parallax.pipeline.runner.AnthropicCompilerProvider"),
+            patch("parallax.pipeline.runner.SemanticRelationAnalyzer"),
+            patch("parallax.pipeline.runner.IngestorService") as MockIngestor,
+            patch("parallax.pipeline.runner.ReplayStatisticsService"),
+            patch("parallax.pipeline.runner.SettlementScannerService") as MockScanner,
+        ):
+            mock_settings.anthropic_api_key = "test-key"
+            mock_settings.friction_bps = 50
+            mock_settings.polymarket_max_events_per_poll = 50
+            mock_settings.kalshi_max_events_per_poll = 50
+            mock_settings.pipeline_max_open_markets = 0
+            mock_settings.orderbook_enabled = False
+            mock_settings.runtime_global_pause = False
+            mock_settings.runtime_degraded_read_only = False
+            mock_readiness.return_value = MagicMock(model_dump=lambda **kwargs: {"checks": {}, "controls": {}})
+
+            MockMarket.return_value.list_open.return_value = []
+            MockIdentity.return_value.resolve_all_ungrouped.return_value = 0
+            MockRelationService.return_value.run = AsyncMock(return_value=0)
+            MockDivergence.return_value.scan.return_value = 0
+            MockCandidates.return_value.list_open.return_value = []
+            MockCandidates.return_value.get_decision_snapshot.return_value = None
+            MockCandidates.return_value.snapshot_to_schema.return_value = None
+            MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={"polymarket": 0, "kalshi": 0})
+            MockScanner.return_value.scan_and_settle.return_value = ["pos-1", "pos-2"]
+
+            summary = await self._make_runner(session).run_once()
+
+        assert summary.positions_settled == 2
+
+    @pytest.mark.anyio
+    async def test_run_once_scanner_exception_does_not_abort_run(self):
+        """A scanner failure is caught and the run completes normally with zero settled."""
+        session = MagicMock()
+        session.commit = MagicMock()
+        session.begin_nested.side_effect = self._nested_tx
+
+        with (
+            patch("parallax.pipeline.runner.settings") as mock_settings,
+            patch("parallax.pipeline.runner.build_readiness_payload") as mock_readiness,
+            patch("parallax.pipeline.runner.MarketRepository") as MockMarket,
+            patch("parallax.pipeline.runner.PostgresGraphRepository"),
+            patch("parallax.pipeline.runner.AuditService"),
+            patch("parallax.pipeline.runner.IdentityService") as MockIdentity,
+            patch("parallax.pipeline.runner.RelationAnalysisService") as MockRelationService,
+            patch("parallax.pipeline.runner.DivergenceService") as MockDivergence,
+            patch("parallax.pipeline.runner.CandidateRepository") as MockCandidates,
+            patch("parallax.pipeline.runner.CourtService"),
+            patch("parallax.pipeline.runner.TrackerService"),
+            patch("parallax.pipeline.runner.CompilerService") as MockCompiler,
+            patch("parallax.pipeline.runner.AnthropicCompilerProvider"),
+            patch("parallax.pipeline.runner.SemanticRelationAnalyzer"),
+            patch("parallax.pipeline.runner.IngestorService") as MockIngestor,
+            patch("parallax.pipeline.runner.ReplayStatisticsService"),
+            patch("parallax.pipeline.runner.SettlementScannerService") as MockScanner,
+        ):
+            mock_settings.anthropic_api_key = "test-key"
+            mock_settings.friction_bps = 50
+            mock_settings.polymarket_max_events_per_poll = 50
+            mock_settings.kalshi_max_events_per_poll = 50
+            mock_settings.pipeline_max_open_markets = 0
+            mock_settings.orderbook_enabled = False
+            mock_settings.runtime_global_pause = False
+            mock_settings.runtime_degraded_read_only = False
+            mock_readiness.return_value = MagicMock(model_dump=lambda **kwargs: {"checks": {}, "controls": {}})
+
+            MockMarket.return_value.list_open.return_value = []
+            MockIdentity.return_value.resolve_all_ungrouped.return_value = 0
+            MockRelationService.return_value.run = AsyncMock(return_value=0)
+            MockDivergence.return_value.scan.return_value = 0
+            MockCandidates.return_value.list_open.return_value = []
+            MockCandidates.return_value.get_decision_snapshot.return_value = None
+            MockCandidates.return_value.snapshot_to_schema.return_value = None
+            MockCompiler.return_value.compile = AsyncMock(return_value=MagicMock())
+            MockIngestor.return_value.run_once = AsyncMock(return_value={"polymarket": 0, "kalshi": 0})
+            MockScanner.return_value.scan_and_settle.side_effect = RuntimeError("scanner boom")
+
+            summary = await self._make_runner(session).run_once()
+
+        assert summary is not None
+        assert summary.positions_settled == 0

@@ -31,6 +31,7 @@ from parallax.ingestion.polymarket_adapter import PolymarketAdapter
 from parallax.detection.semantic import SemanticRelationAnalyzer
 from parallax.prover.service import RelationAnalysisService
 from parallax.shared.schemas import PayoffMatrix
+from parallax.settlement.scanner import SettlementScannerService
 from parallax.tracker.service import TrackerService
 
 log = logging.getLogger(__name__)
@@ -347,6 +348,15 @@ class PipelineRunner:
                         log.warning("pipeline: candidate %s failed: %s", cid, exc)
                         errors.append(f"candidate:{cid}:{exc}")
                 session.commit()
+
+                try:
+                    scanner = SettlementScannerService(session)
+                    settled_ids = scanner.scan_and_settle()
+                    positions_settled += len(settled_ids)
+                    if settled_ids:
+                        session.commit()
+                except Exception as exc:
+                    log.warning("pipeline: settlement scan failed: %s", exc)
 
                 audit_svc.record(
                     "pipeline.run.completed",
