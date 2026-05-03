@@ -512,6 +512,12 @@ class CourtService:
         assessment, simulation, adjusted_risk = self.assess_with_snapshots(candidate_id, snapshots)
         return self._persist_evaluation(candidate_id, assessment, simulation, run_id, adjusted_risk=adjusted_risk)
 
+    def evaluate_with_replay(self, candidate_id: str, run_id: str | None = None) -> CourtDecision:
+        """Evaluate using replay-calibrated simulation; persist decision and snapshot."""
+        simulation = self._simulator.simulate_replay(candidate_id)
+        assessment, simulation = self._run_assessment(candidate_id, simulation)
+        return self._persist_evaluation(candidate_id, assessment, simulation, run_id)
+
     def evaluate(self, candidate_id: str, run_id: str | None = None) -> CourtDecision:
         assessment, simulation = self.assess_with_simulation(candidate_id)
         return self._persist_evaluation(candidate_id, assessment, simulation, run_id)

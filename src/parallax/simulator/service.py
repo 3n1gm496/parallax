@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from parallax.candidates.repository import CandidateRepository
 from parallax.execution.estimator import DepthAwareExecutablePriceEstimator
 from parallax.execution.fill_simulator import DepthAwareFillSimulator
+from parallax.execution.replay_stats import ReplayStatisticsService
 from parallax.execution.schemas import OrderbookSnapshot
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.shared.relation_signals import get_relation_signals
@@ -192,6 +193,53 @@ class SimulatorService:
             snapshot_ids=snapshot_ids,
             depth_support=all_supported,
             partial_fill_risk=round(worst_partial_fill_risk, 4),
+        )
+
+    def simulate_replay(self, candidate_id: str) -> SimulationResult:
+        """Replay-calibrated simulation using settled position history for this opportunity type.
+
+        Falls back to heuristic execution_model when history is insufficient.
+        """
+        candidate = self._repo.get(candidate_id)
+        if candidate is None:
+            raise ValueError(f"Candidate {candidate_id} not found")
+
+        heuristic = self.simulate(candidate_id)
+
+        stats = ReplayStatisticsService(self._session).get_stats(candidate.opportunity_type)
+        if stats is None:
+            return heuristic
+
+        effective_capture = min(max(stats.mean_edge_capture, 0.0), 1.5)
+        adjusted_pnl = round(heuristic.simulated_pnl * effective_capture, 6)
+        adjusted_fill = round(min(1.0, max(0.2, stats.win_rate)), 4)
+
+        note = (
+            f"replay-calibrated execution model: n_settled={stats.n_settled}, "
+            f"win_rate={stats.win_rate:.3f}, mean_edge_capture={stats.mean_edge_capture:.3f}, "
+            f"adjusted_pnl={adjusted_pnl:.6f}"
+        )
+
+        return SimulationResult(
+            candidate_id=candidate_id,
+            displayed_edge=heuristic.displayed_edge,
+            executable_edge=adjusted_pnl,
+            simulated_pnl=adjusted_pnl,
+            friction_bps=heuristic.friction_bps,
+            fill_probability=adjusted_fill,
+            is_executable=adjusted_pnl > 0,
+            note=note,
+            estimated_slippage_bps=heuristic.estimated_slippage_bps,
+            estimated_slippage_cost=heuristic.estimated_slippage_cost,
+            spread_cross_cost=heuristic.spread_cross_cost,
+            stale_quote_cost=heuristic.stale_quote_cost,
+            partial_fill_cost=heuristic.partial_fill_cost,
+            non_execution_cost=heuristic.non_execution_cost,
+            execution_quality=self._execution_quality(adjusted_fill),
+            risk_flags=heuristic.risk_flags,
+            venue_breakdown=heuristic.venue_breakdown,
+            execution_model="replay_based",
+            model_version="replay-v1",
         )
 
     @staticmethod
