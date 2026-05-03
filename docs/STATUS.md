@@ -88,10 +88,26 @@ The snapshot execution path is now visible across the ops surface, readiness rep
 - `OperationsView.tsx`: Execution Coverage panel fetches `/api/ops/execution` and shows per-platform token/snapshot counts, staleness, and model distribution
 - Frontend `SimulationResult` and `CandidateSummary` types updated to carry new fields
 
+## Risk Score Snapshot Integration (Fase 4 — 2026-05-03)
+
+Orderbook signals now feed back into `RiskScore` at court evaluation time:
+
+- `RiskScore.adjust_from_simulation(base, simulation) -> RiskScore`: static method producing a snapshot-adjusted score
+  - `depth_support=True` → lowers `execution_risk` by 0.08 (clamped at 0.0)
+  - `depth_support=False` → raises `execution_risk` by 0.30 (clamped at 1.0)
+  - `partial_fill_risk > 0` → `liquidity_risk = max(base, partial_fill_risk * 0.8)`
+  - `composite` recomputed from adjusted components; `policy_version="risk-v2-snapshot"`
+- `CourtService._compute_adjusted_risk()`: fetches candidate's stored risk and calls `adjust_from_simulation`
+- `CourtService._run_assessment()`: accepts optional `risk_override` parameter; uses it in place of candidate's stored score when provided
+- `CourtService.assess_with_snapshots()`: computes adjusted risk, injects into `_run_assessment`, returns 3-tuple `(assessment, simulation, adjusted_risk)`
+- `CourtService._persist_evaluation()`: accepts `adjusted_risk` kwarg; persists it in decision snapshot when provided
+- Original `opportunity_candidates.risk_scores` column is never mutated; adjustment is evaluation-time only
+
 ## Verified But Still Heuristic
 
 - identity matching beyond native `group_id` is conservative multi-signal logic, not a trained entity-resolution system
-- risk scoring is still a heuristic composite, even though it is now versioned and decomposed into a richer vector
+- risk scoring is still a detection-time heuristic composite; when snapshot-based simulation is available, `execution_risk` and `liquidity_risk` are adjusted from `depth_support` and `partial_fill_risk` and the adjusted score is persisted in the decision snapshot (`policy_version="risk-v2-snapshot"`)
+- court `composite_risk` gate uses snapshot-adjusted composite when `orderbook_enabled=True`, detection-time composite otherwise
 - court gating is structured and opportunity-aware, but still threshold-based
 - execution simulation defaults to heuristic when `orderbook_enabled=False`; snapshot path available when enabled
 - orderbook snapshot path is not yet tested against live CLOB APIs; adapters are implemented and unit-tested with mocks
