@@ -1,6 +1,6 @@
 def test_all_models_importable():
     from parallax.db.models import (
-        AuditEvent, CounterexampleRecord, IdentityMatchReview, LogicalRelationSet, OpportunityCandidate, RawMarket, RunProofRecord,
+        AuditEvent, CounterexampleRecord, IdentityMatchReview, LogicalRelationSet, OpportunityCandidate, RawMarket, RunProofRecord, SolverAuditRecordModel, SolverFixtureRecord, SolverPolicyRecord,
     )
     assert AuditEvent.__tablename__ == "audit_events"
     assert CounterexampleRecord.__tablename__ == "counterexample_records"
@@ -9,6 +9,9 @@ def test_all_models_importable():
     assert RawMarket.__tablename__ == "raw_markets"
     assert OpportunityCandidate.__tablename__ == "opportunity_candidates"
     assert RunProofRecord.__tablename__ == "run_proofs"
+    assert SolverPolicyRecord.__tablename__ == "solver_policies"
+    assert SolverFixtureRecord.__tablename__ == "solver_fixtures"
+    assert SolverAuditRecordModel.__tablename__ == "solver_audit_records"
 
 
 def test_venue_token_model_exists():

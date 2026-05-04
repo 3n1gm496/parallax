@@ -5,15 +5,22 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from parallax.db.models import CandidateDecisionSnapshot, OpportunityCandidate
+from parallax.db.models import (
+    CandidateDecisionSnapshot,
+    OpportunityCandidate,
+    SolverAuditRecordModel,
+)
 from parallax.shared.schemas import (
     CourtAssessment,
     CourtDecision,
     DecisionSnapshot,
+    OutcomeStateSpace,
     OpportunityType,
     PayoffMatrix,
+    ProofObject,
     RelationEvidenceResponse,
     RiskScore,
+    SolverAuditRecord,
     SimulationResult,
 )
 
@@ -28,11 +35,29 @@ class CandidateRepository:
         payoff_matrix: PayoffMatrix,
         opportunity_type: OpportunityType,
         risk_scores: dict,
+        *,
+        scenario_matrix: OutcomeStateSpace,
+        proof_object: ProofObject,
+        solver_version: str,
+        constraint_fingerprint: str,
+        basket: dict[str, object] | None = None,
+        false_arbitrage_label: str | None = None,
+        audit_record: SolverAuditRecord | None = None,
     ) -> OpportunityCandidate:
+        scenario_payload = scenario_matrix.model_dump(mode="json")
+        proof_payload = proof_object.model_dump(mode="json")
+        if not scenario_payload or not proof_payload:
+            raise ValueError("scenario_matrix and proof_object are required for candidate persistence")
         candidate = OpportunityCandidate(
             id=uuid.uuid4(),
             market_ids=market_ids,
             payoff_matrix=payoff_matrix.model_dump(),
+            scenario_matrix_json=scenario_payload,
+            proof_object_json=proof_payload,
+            solver_version=solver_version,
+            constraint_fingerprint=constraint_fingerprint,
+            basket_json=basket or {},
+            false_arbitrage_label=false_arbitrage_label,
             opportunity_type=opportunity_type.value,
             worst_case_payoff=payoff_matrix.worst_case_payoff,
             friction_bps=payoff_matrix.friction_bps,
@@ -41,12 +66,42 @@ class CandidateRepository:
         )
         self._session.add(candidate)
         self._session.flush()
+        if audit_record is not None:
+            self._session.add(
+                SolverAuditRecordModel(
+                    candidate_id=candidate.id,
+                    constraint_fingerprint=audit_record.constraint_fingerprint,
+                    solver_version=audit_record.solver_version,
+                    policy_key=audit_record.policy_key,
+                    status=audit_record.status,
+                    audit_json=audit_record.trace,
+                )
+            )
+            self._session.flush()
         return candidate
 
     def get(self, candidate_id: str) -> OpportunityCandidate | None:
         return self._session.get(OpportunityCandidate, uuid.UUID(candidate_id))
 
-    def candidate_exists(self, market_ids: list[str], opportunity_type: OpportunityType) -> bool:
+    def candidate_exists(
+        self,
+        market_ids: list[str],
+        opportunity_type: OpportunityType,
+        *,
+        constraint_fingerprint: str | None = None,
+        solver_version: str | None = None,
+    ) -> bool:
+        if constraint_fingerprint and solver_version:
+            return (
+                self._session.query(OpportunityCandidate)
+                .filter_by(
+                    opportunity_type=opportunity_type.value,
+                    status="open",
+                    constraint_fingerprint=constraint_fingerprint,
+                    solver_version=solver_version,
+                )
+                .first()
+            ) is not None
         target = frozenset(market_ids)
         rows = (
             self._session.query(OpportunityCandidate)
@@ -54,6 +109,18 @@ class CandidateRepository:
             .all()
         )
         return any(frozenset(row.market_ids) == target for row in rows)
+
+    def get_solver_artifacts(self, candidate_id: str) -> tuple[OutcomeStateSpace | None, ProofObject | None]:
+        candidate = self.get(candidate_id)
+        if candidate is None:
+            return None, None
+        scenario = (
+            OutcomeStateSpace.model_validate(candidate.scenario_matrix_json)
+            if candidate.scenario_matrix_json
+            else None
+        )
+        proof = ProofObject.model_validate(candidate.proof_object_json) if candidate.proof_object_json else None
+        return scenario, proof
 
     def list_open(self, limit: int = 100, offset: int = 0) -> list[OpportunityCandidate]:
         return (

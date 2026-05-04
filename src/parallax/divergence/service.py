@@ -7,13 +7,12 @@ from parallax.graph.repository import GraphRepository
 from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import (
     IdentityResolutionStatus,
-    Leg,
-    OpportunityType,
-    PayoffMatrix,
+    LogicalRelationSchema,
+    LogicalRelationSetSchema,
     RiskScore,
     RelationType,
-    Scenario,
 )
+from parallax.solver.service import GeneralizedPayoffSolver
 
 _MIN_PROFIT_AFTER_FRICTION = 0.005  # 0.5% minimum edge
 
@@ -31,12 +30,33 @@ class DivergenceService:
         self._graph_repo = graph_repo
         self._candidate_repo = CandidateRepository(session)
         self._friction_bps = friction_bps
+        self._solver = GeneralizedPayoffSolver(friction_bps=friction_bps)
 
     def scan(self, markets: list[RawMarket]) -> int:
         """Check all relations for profitable divergences. Returns count of new candidates."""
         market_map = {m.id: m for m in markets}
         found = 0
         seen_pairs: set[frozenset[str]] = set()
+        processed_sets: set[str] = set()
+
+        for relation_set in self._list_tradeable_relation_sets():
+            member_ids = [market_id for market_id in relation_set.member_market_ids if market_id in market_map]
+            if len(member_ids) < 2 or relation_set.set_key in processed_sets:
+                continue
+            relation_evidence = load_relation_evidence(self._session, member_ids)
+            if relation_evidence is None:
+                continue
+            result = self._solve_candidate(
+                [market_map[market_id] for market_id in member_ids],
+                relation_evidence=relation_evidence,
+                relation_sets=[relation_set],
+                relations=[],
+            )
+            if result is None:
+                continue
+            if self._persist_candidate([market_map[market_id] for market_id in member_ids], relation_evidence, result):
+                found += 1
+                processed_sets.add(relation_set.set_key)
 
         for m in markets:
             relations = self._graph_repo.get_relations(m.id)
@@ -61,71 +81,107 @@ class DivergenceService:
                 if a_id not in market_map or b_id not in market_map:
                     continue
 
-                a, b = market_map[a_id], market_map[b_id]
-                matrix = None
-
-                if rtype == RelationType.MUTUALLY_EXCLUSIVE:
-                    matrix = self._check_mutually_exclusive(a, b)
-                elif rtype in (RelationType.EQUIVALENT, RelationType.DUPLICATE):
-                    matrix = self._check_equivalent(a, b)
-
-                if matrix and matrix.worst_case_payoff > _MIN_PROFIT_AFTER_FRICTION:
-                    if self._candidate_repo.candidate_exists([a_id, b_id], matrix.opportunity_type):
-                        continue
-                    risk_score = self._score_candidate(a, b, relation_evidence)
-                    self._candidate_repo.create(
-                        market_ids=[a_id, b_id],
-                        payoff_matrix=matrix,
-                        opportunity_type=matrix.opportunity_type,
-                        risk_scores=risk_score.model_dump(),
-                    )
+                result = self._solve_candidate(
+                    [market_map[a_id], market_map[b_id]],
+                    relation_evidence=relation_evidence,
+                    relation_sets=[],
+                    relations=[self._relation_dict_to_schema(rel)],
+                )
+                if result is None:
+                    continue
+                if self._persist_candidate([market_map[a_id], market_map[b_id]], relation_evidence, result):
                     found += 1
 
         return found
 
-    def _friction_cost(self, total_cost: float) -> float:
-        return total_cost * self._friction_bps / 10_000
+    def _persist_candidate(self, markets: list[RawMarket], relation_evidence, result) -> bool:
+        market_ids = [market.id for market in markets]
+        matrix = result.payoff_matrix
+        if matrix.worst_case_payoff <= _MIN_PROFIT_AFTER_FRICTION:
+            return False
+        if result.false_arbitrage_label is not None:
+            return False
+        if self._candidate_repo.candidate_exists(
+            market_ids,
+            matrix.opportunity_type,
+            constraint_fingerprint=result.constraint_fingerprint,
+            solver_version=result.solver_version,
+        ):
+            return False
+        risk_score = (
+            self._score_candidate(markets[0], markets[1], relation_evidence)
+            if len(markets) >= 2
+            else RiskScore.combine(oracle=0.5, deadline=0.5, semantic=0.5)
+        )
+        self._candidate_repo.create(
+            market_ids=market_ids,
+            payoff_matrix=matrix,
+            opportunity_type=matrix.opportunity_type,
+            risk_scores=risk_score.model_dump(),
+            scenario_matrix=result.scenario_matrix,
+            proof_object=result.proof_object,
+            solver_version=result.solver_version,
+            constraint_fingerprint=result.constraint_fingerprint,
+            basket=result.basket,
+            false_arbitrage_label=result.false_arbitrage_label,
+            audit_record=result.audit_record,
+        )
+        return True
 
-    def _check_mutually_exclusive(
-        self, a: RawMarket, b: RawMarket
-    ) -> PayoffMatrix | None:
-        """Buy NO on both legs (equivalent to selling YES). Profit if YES prices sum > 1.0 + friction.
+    def _solve_candidate(
+        self,
+        markets: list[RawMarket],
+        *,
+        relation_evidence,
+        relation_sets: list[LogicalRelationSetSchema],
+        relations: list[LogicalRelationSchema],
+    ):
+        return self._solver.solve(
+            markets=markets,
+            relation_evidence=relation_evidence,
+            relation_sets=relation_sets,
+            relations=relations,
+        )
 
-        total_cost = sum of NO-leg prices = (1-p_a) + (1-p_b): capital deployed,
-        consistent with EQUIVALENT where total_cost = buy_price + (1-sell_price).
-        gross = p_a + p_b - 1.0 (collateral payout minus premium received).
-        worst_case_payoff is post-friction; SimulatorService must NOT re-apply.
-        """
-        if not a.outcome_prices or not b.outcome_prices:
-            return None
-        p_a = a.outcome_prices[0]
-        p_b = b.outcome_prices[0]
-        if not isinstance(p_a, (int, float)) or not isinstance(p_b, (int, float)):
-            return None
-        total_cost = (1.0 - p_a) + (1.0 - p_b)  # capital deployed: cost of both NO legs
-        gross = p_a + p_b - 1.0
-        friction = self._friction_cost(total_cost)
-        net = gross - friction
+    def _list_tradeable_relation_sets(self) -> list[LogicalRelationSetSchema]:
+        if not hasattr(self._graph_repo, "list_relation_sets"):
+            return []
+        rows = self._graph_repo.list_relation_sets(limit=500)
+        if not isinstance(rows, list):
+            return []
+        result: list[LogicalRelationSetSchema] = []
+        for row in rows:
+            try:
+                schema = LogicalRelationSetSchema(
+                    relation_set_id=row.get("id"),
+                    set_key=row["set_key"],
+                    member_market_ids=row.get("member_market_ids", []),
+                    relation_type=RelationType(row["relation_type"]),
+                    proof_status=row.get("proof_status", "verified"),
+                    tradeable_relation=bool(row.get("tradeable_relation", False)),
+                    confidence=row.get("confidence", 0.0),
+                    created_by=row.get("created_by", "unknown"),
+                    evidence=row.get("evidence", {}),
+                    frame_id=row.get("frame_id"),
+                )
+            except Exception:
+                continue
+            if schema.tradeable_relation and schema.proof_status == "verified":
+                result.append(schema)
+        return result
 
-        if net <= 0:
-            return None
-
-        legs = [
-            Leg(market_id=a.id, side="NO", price=1.0 - p_a, platform=a.platform),
-            Leg(market_id=b.id, side="NO", price=1.0 - p_b, platform=b.platform),
-        ]
-        return PayoffMatrix(
-            legs=legs,
-            total_cost=total_cost,
-            scenarios=[
-                Scenario(name="A resolves YES", description="A pays out, B expires worthless", payoff=net, is_breaking=False),
-                Scenario(name="B resolves YES", description="B pays out, A expires worthless", payoff=net, is_breaking=False),
-            ],
-            worst_case_payoff=net,
-            best_case_payoff=net,
-            breaking_scenario=None,
-            opportunity_type=OpportunityType.MUTUALLY_EXCLUSIVE_MISPRICING,
-            friction_bps=self._friction_bps,
+    @staticmethod
+    def _relation_dict_to_schema(rel: dict) -> LogicalRelationSchema:
+        return LogicalRelationSchema(
+            from_market_id=rel["from_market_id"],
+            to_market_id=rel["to_market_id"],
+            relation_type=RelationType(rel["relation_type"]),
+            proof_status=rel.get("proof_status", "verified"),
+            tradeable_relation=bool(rel.get("tradeable_relation", False)),
+            confidence=rel.get("confidence", 0.0),
+            created_by=rel.get("created_by", "unknown"),
+            evidence=rel.get("evidence", {}),
+            frame_id=rel.get("frame_id"),
         )
 
     def _score_candidate(self, a: RawMarket, b: RawMarket, relation) -> RiskScore:
@@ -192,58 +248,4 @@ class DivergenceService:
             liquidity=round(liquidity_risk, 4),
             cancellation=round(cancellation_risk, 4),
             source_trust=round(source_trust_risk, 4),
-        )
-
-    def _check_equivalent(
-        self, a: RawMarket, b: RawMarket
-    ) -> PayoffMatrix | None:
-        """Buy YES on cheaper platform, buy NO (sell YES) on more expensive.
-
-        For truly EQUIVALENT markets both legs resolve the same way, so the
-        spread (sell_price - buy_price) is realised regardless of outcome.
-        total_cost = buy_price + (1 - sell_price); payoff is direction-neutral.
-        worst_case_payoff is already post-friction; SimulatorService must NOT
-        re-apply friction.
-        """
-        if not a.outcome_prices or not b.outcome_prices:
-            return None
-        p_a = a.outcome_prices[0]
-        p_b = b.outcome_prices[0]
-        if not isinstance(p_a, (int, float)) or not isinstance(p_b, (int, float)):
-            return None
-        if abs(p_a - p_b) < 0.01:
-            return None
-
-        if p_a < p_b:
-            buyer, seller = a, b
-            buy_price, sell_price = p_a, p_b
-        else:
-            buyer, seller = b, a
-            buy_price, sell_price = p_b, p_a
-
-        # Capital deployed: cost of YES leg + cost of NO leg
-        total_cost = buy_price + (1.0 - sell_price)
-        gross = sell_price - buy_price  # same payoff regardless of YES/NO outcome
-        friction = self._friction_cost(total_cost)
-        net = gross - friction
-
-        if net <= 0:
-            return None
-
-        legs = [
-            Leg(market_id=buyer.id, side="YES", price=buy_price, platform=buyer.platform),
-            Leg(market_id=seller.id, side="NO", price=1.0 - sell_price, platform=seller.platform),
-        ]
-        return PayoffMatrix(
-            legs=legs,
-            total_cost=total_cost,
-            scenarios=[
-                Scenario(name="Event resolves YES", description="YES leg wins, NO leg expires worthless", payoff=net, is_breaking=False),
-                Scenario(name="Event resolves NO", description="NO leg wins, YES leg expires worthless", payoff=net, is_breaking=False),
-            ],
-            worst_case_payoff=net,
-            best_case_payoff=net,
-            breaking_scenario=None,
-            opportunity_type=OpportunityType.DUPLICATE_DIVERGENCE,
-            friction_bps=self._friction_bps,
         )

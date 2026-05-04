@@ -334,6 +334,90 @@ class PayoffMatrix(BaseModel):
     friction_bps: NonNegativeBps
 
 
+class ScenarioConstraintModel(BaseModel):
+    constraint_key: str
+    relation_type: RelationType
+    market_ids: list[str] = Field(default_factory=list)
+    proof_status: Literal["verified", "rejected", "needs_review"] = "verified"
+    tradeable_relation: bool = False
+    identity_status: IdentityResolutionStatus = IdentityResolutionStatus.UNRESOLVED
+    identity_version: str = "identity-v2"
+    set_key: str | None = None
+    frame_id: str | None = None
+    provenance: dict[str, object] = Field(default_factory=dict)
+    execution_context: dict[str, object] = Field(default_factory=dict)
+
+
+class OutcomeState(BaseModel):
+    state_id: str
+    assignments: dict[str, Literal["YES", "NO"]]
+    is_possible: bool = True
+    violated_constraints: list[str] = Field(default_factory=list)
+    explanation: str | None = None
+
+
+class OutcomeStateSpace(BaseModel):
+    market_ids: list[str] = Field(default_factory=list)
+    valid_states: list[OutcomeState] = Field(default_factory=list)
+    impossible_states: list[OutcomeState] = Field(default_factory=list)
+    enumeration_mode: Literal["custom", "z3", "hybrid"] = "custom"
+
+
+class SolverPolicy(BaseModel):
+    policy_key: str = "default"
+    solver_version: str = "generalized-payoff-v1"
+    min_profit_after_friction: float = 0.005
+    max_quotes_staleness_seconds: float = 60.0
+    max_leg_count_for_custom_enumerator: int = 8
+    require_verified_identity_for_tradeable: bool = True
+    require_proof_for_persistence: bool = True
+    capital_limit: float = 1.0
+    require_executable_pricing_when_available: bool = True
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ProofObject(BaseModel):
+    solver_version: str
+    constraint_fingerprint: str
+    policy_key: str
+    policy_version: str
+    identity_version: str
+    proof_status: Literal["verified", "degraded", "needs_review", "false_arbitrage"] = "verified"
+    relation_types: list[RelationType] = Field(default_factory=list)
+    relation_set_keys: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    executable_pricing_used: bool = False
+    false_arbitrage_label: str | None = None
+    impossible_scenarios: list[OutcomeState] = Field(default_factory=list)
+    breaking_scenarios: list[Scenario] = Field(default_factory=list)
+    audit_trail: list[dict[str, object]] = Field(default_factory=list)
+
+
+class SolverAuditRecord(BaseModel):
+    constraint_fingerprint: str
+    solver_version: str
+    policy_key: str
+    candidate_id: str | None = None
+    status: Literal["solved", "blocked", "false_arbitrage"] = "solved"
+    trace: dict[str, object] = Field(default_factory=dict)
+    created_at: datetime | None = None
+
+
+class SolverFixtureCase(BaseModel):
+    case_key: str
+    description: str
+    relation_type: RelationType
+    markets: list[RawMarketData] = Field(default_factory=list)
+    relation_sets: list[LogicalRelationSetSchema] = Field(default_factory=list)
+    relations: list[LogicalRelationSchema] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class SolverFixtureLibrary(BaseModel):
+    version: str = "solver-fixtures-v1"
+    fixtures: list[SolverFixtureCase] = Field(default_factory=list)
+
+
 class RiskScore(BaseModel):
     oracle_risk: Probability
     deadline_risk: Probability

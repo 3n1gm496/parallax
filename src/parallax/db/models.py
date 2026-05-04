@@ -243,6 +243,12 @@ class OpportunityCandidate(Base):
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     market_ids: Mapped[list] = mapped_column(JSON)
     payoff_matrix: Mapped[dict] = mapped_column(JSON)
+    scenario_matrix_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    proof_object_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    solver_version: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    constraint_fingerprint: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    basket_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    false_arbitrage_label: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     opportunity_type: Mapped[str] = mapped_column(String(100), index=True)
     worst_case_payoff: Mapped[float] = mapped_column(Float)
     friction_bps: Mapped[int] = mapped_column(Integer)
@@ -253,6 +259,12 @@ class OpportunityCandidate(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
     __table_args__ = (
         Index("ix_opportunity_candidates_status_decision_detected", "status", "court_decision", "detected_at"),
+        Index(
+            "ix_opportunity_candidates_solver_dedupe",
+            "status",
+            "solver_version",
+            "constraint_fingerprint",
+        ),
     )
 
 
@@ -299,6 +311,50 @@ class RunProofRecord(Base):
     updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
     __table_args__ = (
         Index("ix_run_proofs_status_completed", "run_status", "completed_at"),
+    )
+
+
+class SolverPolicyRecord(Base):
+    __tablename__ = "solver_policies"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    solver_version: Mapped[str] = mapped_column(String(100), index=True)
+    policy_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)
+
+
+class SolverFixtureRecord(Base):
+    __tablename__ = "solver_fixtures"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    case_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    fixture_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class SolverAuditRecordModel(Base):
+    __tablename__ = "solver_audit_records"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("opportunity_candidates.id"), nullable=True, index=True
+    )
+    constraint_fingerprint: Mapped[str] = mapped_column(String(255), index=True)
+    solver_version: Mapped[str] = mapped_column(String(100), index=True)
+    policy_key: Mapped[str] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(50), default="solved", index=True)
+    audit_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+    __table_args__ = (
+        Index(
+            "ix_solver_audit_records_fingerprint_solver",
+            "constraint_fingerprint",
+            "solver_version",
+            "created_at",
+        ),
     )
 
 
