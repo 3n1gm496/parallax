@@ -125,3 +125,21 @@ def test_simulation_result_snapshot_mode():
     assert result.execution_model == "snapshot_based"
     assert result.depth_support is True
     assert result.partial_fill_risk == 0.05
+
+
+def test_simulation_result_supports_new_execution_paths():
+    from parallax.shared.schemas import SimulationResult
+
+    result = SimulationResult(
+        candidate_id="test",
+        simulated_pnl=0.01,
+        friction_bps=50,
+        fill_probability=0.9,
+        is_executable=True,
+        note="primary",
+        execution_model="primary_proof_based",
+        execution_path="primary_proof_based",
+    )
+
+    assert result.execution_model == "primary_proof_based"
+    assert result.execution_path == "primary_proof_based"

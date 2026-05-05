@@ -1,0 +1,31 @@
+[package]
+name = "parallax_core"
+version = "0.2.0"
+edition = "2021"
+description = "Parallax HFT — Deterministic Rust Core (Orderbook + Solver)"
+authors = ["Parallax Trading Systems"]
+
+[lib]
+name = "parallax_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.25", features = ["extension-module"] }
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+futures-util = "0.3"
+url = "2.5"
+log = "0.4"
+env_logger = "0.11"
+prometheus = "0.13"
+dashmap = "5.5"
+core_affinity = "0.8"
+
+[profile.release]
+opt-level = 3         # Maximum code generation optimisation
+lto = true            # Link-Time Optimisation — reduces binary size and increases speed
+codegen-units = 1     # Single codegen unit — maximises LTO effectiveness
+panic = "unwind"      # Allow catching panics to prevent interpreter crash
+strip = "symbols"     # Strip debug symbols from release binary

@@ -2,16 +2,45 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, not_
+from sqlalchemy import func, not_, text
 from sqlalchemy.orm import Session
 
+from parallax.ops.schemas import (
+    AuditOpsMetrics,
+    AutopsyOpsMetrics,
+    BacktestReplayReport,
+    BacktestReplayRow,
+    CalibrationOpsMetrics,
+    EvaluationOpsMetrics,
+    EvaluationReport,
+    IdentityClusterEntry,
+    IdentityClusterQueueResponse,
+    IdentityMetricsReport,
+    IdentityReviewQueueEntry,
+    IdentityReviewQueueResponse,
+    OpsActivityMetric,
+    OpsMetricsResponse,
+    OpportunityEvaluationSummary,
+    PipelineOpsMetrics,
+    ProofBundleReport,
+    ProofCheckItem,
+    RelationQualityOpsMetrics,
+    RelationSetListResponse,
+    RunProof,
+    RunProofListResponse,
+    RunSummary,
+)
 from parallax.candidates.evidence import load_relation_evidence
 from parallax.candidates.repository import CandidateRepository
+from parallax.calibration.service import CalibrationService
+from parallax.ops.runtime import build_readiness_payload
 from parallax.db.models import (
+    ActivePolicyVersionRecord,
     AuditEvent,
     AutopsyRecord,
     CandidateDecisionSnapshot,
     CounterexampleRecord,
+    DecisionLedgerRecord,
     EventIdentityCluster,
     IdentityClusterMember,
     IdentityMetric,
@@ -22,29 +51,7 @@ from parallax.db.models import (
     RawMarket,
     RelationReview,
     RunProofRecord,
-)
-from parallax.ops.schemas import (
-    OpsActivityMetric,
-    AuditOpsMetrics,
-    BacktestReplayReport,
-    BacktestReplayRow,
-    AutopsyOpsMetrics,
-    CalibrationOpsMetrics,
-    EvaluationOpsMetrics,
-    EvaluationReport,
-    IdentityClusterEntry,
-    IdentityClusterQueueResponse,
-    IdentityMetricsReport,
-    IdentityReviewQueueEntry,
-    IdentityReviewQueueResponse,
-    OpsMetricsResponse,
-    OpportunityEvaluationSummary,
-    PipelineOpsMetrics,
-    RelationSetListResponse,
-    RelationQualityOpsMetrics,
-    RunProof,
-    RunProofListResponse,
-    RunSummary,
+    TradeProofCertificateRecord,
 )
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.shared.schemas import IdentityResolutionStatus, LogicalRelationSetSchema, RelationType
@@ -55,13 +62,12 @@ _PIPELINE_EVENT_TYPES = (
     "pipeline.prover.complete",
     "pipeline.divergence.complete",
 )
-_LEGACY_EVENT_PREFIX = "oddpool.%"
+
 
 
 def get_ops_metrics_payload(session: Session) -> OpsMetricsResponse:
     now = datetime.now(timezone.utc)
     last_24h = now - timedelta(hours=24)
-    non_legacy_audit = not_(AuditEvent.event_type.like(_LEGACY_EVENT_PREFIX))
 
     market_counts = _group_count_rows(
         session.query(RawMarket.platform, func.count(RawMarket.id)).group_by(RawMarket.platform).all()
@@ -73,7 +79,6 @@ def get_ops_metrics_payload(session: Session) -> OpsMetricsResponse:
     )
     audit_counts = _group_count_rows(
         session.query(AuditEvent.event_type, func.count(AuditEvent.id))
-        .filter(non_legacy_audit)
         .group_by(AuditEvent.event_type)
         .all()
     )
@@ -91,10 +96,10 @@ def get_ops_metrics_payload(session: Session) -> OpsMetricsResponse:
     open_positions = (
         session.query(func.count(PaperPosition.id)).filter(PaperPosition.status == "OPEN").scalar() or 0
     )
-    total_audit_events = session.query(func.count(AuditEvent.id)).filter(non_legacy_audit).scalar() or 0
+    total_audit_events = session.query(func.count(AuditEvent.id)).scalar() or 0
     audit_events_last_24h = (
         session.query(func.count(AuditEvent.id))
-        .filter(non_legacy_audit, AuditEvent.created_at >= last_24h)
+        .filter(AuditEvent.created_at >= last_24h)
         .scalar()
         or 0
     )
@@ -107,30 +112,30 @@ def get_ops_metrics_payload(session: Session) -> OpsMetricsResponse:
     )
     candidate_evaluations_last_24h = (
         session.query(func.count(AuditEvent.id))
-        .filter(non_legacy_audit, AuditEvent.event_type == "pipeline.candidate.evaluated", AuditEvent.created_at >= last_24h)
+        .filter(AuditEvent.event_type == "pipeline.candidate.evaluated", AuditEvent.created_at >= last_24h)
         .scalar()
         or 0
     )
     positions_opened_last_24h = (
         session.query(func.count(AuditEvent.id))
-        .filter(non_legacy_audit, AuditEvent.event_type == "pipeline.position.opened", AuditEvent.created_at >= last_24h)
+        .filter(AuditEvent.event_type == "pipeline.position.opened", AuditEvent.created_at >= last_24h)
         .scalar()
         or 0
     )
     settlements_last_24h = (
         session.query(func.count(AuditEvent.id))
-        .filter(non_legacy_audit, AuditEvent.event_type == "position.settled", AuditEvent.created_at >= last_24h)
+        .filter(AuditEvent.event_type == "position.settled", AuditEvent.created_at >= last_24h)
         .scalar()
         or 0
     )
 
-    latest_audit_at = session.query(func.max(AuditEvent.created_at)).filter(non_legacy_audit).scalar()
+    latest_audit_at = session.query(func.max(AuditEvent.created_at)).scalar()
     latest_autopsy_at = session.query(func.max(AutopsyRecord.created_at)).scalar()
     latest_ingest_at = session.query(func.max(RawMarket.updated_at)).scalar()
     latest_candidate_at = session.query(func.max(OpportunityCandidate.detected_at)).scalar()
     latest_pipeline_event_at = (
         session.query(func.max(AuditEvent.created_at))
-        .filter(non_legacy_audit, AuditEvent.event_type.in_(_PIPELINE_EVENT_TYPES))
+        .filter(AuditEvent.event_type.in_(_PIPELINE_EVENT_TYPES))
         .scalar()
     )
 
@@ -192,6 +197,21 @@ def get_run_proof_payload(session: Session, run_id: str) -> RunProof | None:
     if row is None:
         return None
     return _run_proof_to_schema(row)
+
+
+def _latest_completed_run_summary(session: Session) -> RunSummary | None:
+    runs = list_run_proofs_payload(session, limit=20).runs
+    for run in runs:
+        if run.run_status != "running":
+            return run
+    return runs[0] if runs else None
+
+
+def _semantic_check_status(readiness) -> str:
+    semantic_check = readiness.checks.get("semantic_analysis") or readiness.checks.get("semantic") or {}
+    if isinstance(semantic_check, dict):
+        return str(semantic_check.get("status", "unknown"))
+    return str(getattr(semantic_check, "status", "unknown"))
 
 
 def get_evaluation_report_payload(session: Session) -> EvaluationReport:
@@ -370,6 +390,8 @@ def get_identity_cluster_queue(session: Session, *, limit: int = 100) -> Identit
                 primary_market_id=primary_market_id,
                 primary_market_title=primary_market_title,
                 created_at=cluster.created_at,
+                provenance=cluster.provenance or {},
+                blocking_reasons=list((cluster.provenance or {}).get("blocking_reasons", [])),
             )
         )
     return IdentityClusterQueueResponse(
@@ -394,6 +416,10 @@ def get_identity_metrics_report(session: Session) -> IdentityMetricsReport:
         benchmark_total=int(payload.get("benchmark_total", 0)),
         benchmark_correct=int(payload.get("benchmark_correct", 0)),
         benchmark_wrong=int(payload.get("benchmark_wrong", 0)),
+        false_merge_count=int(latest.false_merge_count or 0),
+        false_split_count=int(latest.false_split_count or 0),
+        unresolved_rate=float(payload.get("unresolved_rate", 0.0) or 0.0),
+        ambiguous_rate=float(payload.get("ambiguous_rate", 0.0) or 0.0),
     )
 
 
@@ -856,35 +882,109 @@ def _build_identity_review_queue(session: Session, limit: int = 100) -> Identity
     return IdentityReviewQueueResponse(generated_at=datetime.now(timezone.utc), items=items[:limit])
 
 
-def get_proof_bundle_payload(session: Session) -> "ProofBundleReport":
-    from parallax.ops.runtime import build_readiness_payload
-    from parallax.ops.schemas import ProofBundleReport, ProofCheckItem
-
+def get_proof_bundle_payload(session: Session) -> ProofBundleReport:
     readiness = build_readiness_payload(session)
-    runs = list_run_proofs_payload(session, limit=1).runs
-    latest_run = runs[0] if runs else None
+    latest_run = _latest_completed_run_summary(session)
     metrics = get_ops_metrics_payload(session)
 
     market_counts = metrics.market_counts_by_platform
     total_markets = sum(market_counts.values())
     total_candidates = sum(metrics.candidate_counts_by_decision.values())
     open_positions = metrics.open_positions
+    candidates_with_solver_proof = (
+        session.query(func.count(OpportunityCandidate.id))
+        .filter(
+            OpportunityCandidate.scenario_matrix_json.isnot(None),
+            OpportunityCandidate.proof_object_json.isnot(None),
+            OpportunityCandidate.solver_version.isnot(None),
+            OpportunityCandidate.constraint_fingerprint.isnot(None),
+        )
+        .scalar()
+        or 0
+    )
+    certificates_issued = (
+        session.query(func.count(TradeProofCertificateRecord.id))
+        .filter(TradeProofCertificateRecord.certificate_status == "issued")
+        .scalar()
+        or 0
+    )
+    certificate_gated_positions = (
+        session.query(func.count(PaperPosition.id))
+        .filter(PaperPosition.certificate_id.isnot(None))
+        .scalar()
+        or 0
+    )
+    decision_ledger_entries = int(session.query(func.count(DecisionLedgerRecord.id)).scalar() or 0)
 
     contracts_compiled = latest_run.contracts_compiled if latest_run else 0
     relations_detected = latest_run.relations_detected if latest_run else 0
+    migrations_ok = _database_head_revision(session) == "0017"
 
-    semantic_check = readiness.checks.get("semantic") or {}
-    semantic_status = (
-        semantic_check.get("status", "unknown")
-        if isinstance(semantic_check, dict)
-        else getattr(semantic_check, "status", "unknown")
-    )
+    latest_calibration = session.query(ActivePolicyVersionRecord).filter_by(status="active").order_by(
+        ActivePolicyVersionRecord.created_at.desc()
+    ).first()
+    if latest_calibration is not None:
+        calibration_status = "complete"
+    else:
+        latest_run_status = CalibrationService(session).latest_run()
+        if latest_run_status is None:
+            calibration_status = "missing"
+        elif latest_run_status.status == "insufficient_data":
+            calibration_status = "partial"
+        else:
+            calibration_status = "blocked"
+
+    execution_model_counts = {}
+    execution_path_counts = {}
+    for simulation in (
+        session.query(CandidateDecisionSnapshot.simulation_result)
+        .filter(CandidateDecisionSnapshot.simulation_result.isnot(None))
+        .all()
+    ):
+        payload = simulation[0]
+        if isinstance(payload, dict):
+            model = str(payload.get("execution_model") or "heuristic")
+            execution_model_counts[model] = execution_model_counts.get(model, 0) + 1
+            path = payload.get("execution_path")
+            if isinstance(path, str) and path:
+                execution_path_counts[path] = execution_path_counts.get(path, 0) + 1
+            elif model == "heuristic":
+                execution_path_counts["calibrated_model"] = execution_path_counts.get("calibrated_model", 0) + 1
+            elif model == "snapshot_based" or model == "replay_based":
+                execution_path_counts["offline_validation"] = execution_path_counts.get("offline_validation", 0) + 1
+            elif model == "degraded":
+                execution_path_counts["degraded_fallback"] = execution_path_counts.get("degraded_fallback", 0) + 1
+            else:
+                execution_path_counts[model] = execution_path_counts.get(model, 0) + 1
+    if execution_path_counts.get("primary_proof_based", 0) > 0:
+        execution_evidence_status = "complete"
+    elif execution_path_counts.get("calibrated_model", 0) > 0:
+        execution_evidence_status = "complete"
+    elif execution_path_counts.get("offline_validation", 0) > 0:
+        execution_evidence_status = "partial"
+    elif execution_path_counts.get("degraded_fallback", 0) > 0:
+        execution_evidence_status = "degraded"
+    elif execution_model_counts.get("snapshot_based", 0) > 0:
+        execution_evidence_status = "complete"
+    elif execution_model_counts.get("degraded", 0) > 0:
+        execution_evidence_status = "degraded"
+    elif execution_model_counts:
+        execution_evidence_status = "partial"
+    else:
+        execution_evidence_status = "blocked"
+
+    semantic_status = _semantic_check_status(readiness)
 
     checklist = [
         ProofCheckItem(
             name="database_ok",
             passed=readiness.database == "ok",
             evidence=f"database={readiness.database}",
+        ),
+        ProofCheckItem(
+            name="migrations_ok",
+            passed=migrations_ok,
+            evidence=f"alembic_head={_database_head_revision(session) or 'missing'}",
         ),
         ProofCheckItem(
             name="polymarket_ingested",
@@ -907,6 +1007,36 @@ def get_proof_bundle_payload(session: Session) -> "ProofBundleReport":
             evidence=f"{relations_detected} relations in last run",
         ),
         ProofCheckItem(
+            name="candidates_with_solver_proof",
+            passed=candidates_with_solver_proof > 0,
+            evidence=f"{candidates_with_solver_proof} candidates with persisted solver proof",
+        ),
+        ProofCheckItem(
+            name="certificates_issued",
+            passed=certificates_issued > 0,
+            evidence=f"{certificates_issued} issued certificates",
+        ),
+        ProofCheckItem(
+            name="certificate_gated_positions",
+            passed=certificate_gated_positions > 0,
+            evidence=f"{certificate_gated_positions} positions linked to certificates",
+        ),
+        ProofCheckItem(
+            name="decision_ledger_entries",
+            passed=decision_ledger_entries > 0,
+            evidence=f"{decision_ledger_entries} ledger entries",
+        ),
+        ProofCheckItem(
+            name="calibration_status",
+            passed=calibration_status == "complete",
+            evidence=calibration_status,
+        ),
+        ProofCheckItem(
+            name="execution_evidence_status",
+            passed=execution_evidence_status == "complete",
+            evidence=execution_evidence_status,
+        ),
+        ProofCheckItem(
             name="run_proof_exists",
             passed=latest_run is not None,
             evidence="run persisted" if latest_run else "no run proof found",
@@ -919,6 +1049,14 @@ def get_proof_bundle_payload(session: Session) -> "ProofBundleReport":
     ]
 
     all_pass = all(item.passed for item in checklist)
+    if readiness.database != "ok" or not migrations_ok:
+        bundle_status = "blocked"
+    elif execution_evidence_status == "degraded":
+        bundle_status = "degraded"
+    elif all_pass:
+        bundle_status = "complete"
+    else:
+        bundle_status = "partial"
     return ProofBundleReport(
         captured_at=datetime.now(timezone.utc),
         readiness_status=readiness.status,
@@ -929,6 +1067,20 @@ def get_proof_bundle_payload(session: Session) -> "ProofBundleReport":
         contracts_compiled_last_run=contracts_compiled,
         relations_detected_last_run=relations_detected,
         run_proof_exists=latest_run is not None,
+        candidates_with_solver_proof=int(candidates_with_solver_proof),
+        certificates_issued=int(certificates_issued),
+        certificate_gated_positions=int(certificate_gated_positions),
+        decision_ledger_entries=decision_ledger_entries,
+        calibration_status=calibration_status,
+        execution_evidence_status=execution_evidence_status,
         proof_checklist=checklist,
-        bundle_status="complete" if all_pass else "partial",
+        bundle_status=bundle_status,
     )
+
+
+def _database_head_revision(session: Session) -> str | None:
+    try:
+        result = session.execute(text("select version_num from alembic_version limit 1")).scalar()
+    except Exception:
+        return None
+    return str(result) if result else None

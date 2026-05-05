@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from parallax.calibration.service import CalibrationService
 from parallax.config import settings
 from parallax.db.models import AutopsyRecord
 from parallax.ops.schemas import PolicyRecommendation, PolicyReport
@@ -94,6 +95,7 @@ def get_policy_report_payload(session: Session, *, replay_limit: int = 100, queu
             )
         )
 
+    active_policy_row = CalibrationService(session).active_policy()
     return PolicyReport(
         generated_at=datetime.now(timezone.utc),
         policy_version=_POLICY_VERSION,
@@ -107,6 +109,7 @@ def get_policy_report_payload(session: Session, *, replay_limit: int = 100, queu
         recent_identity_invalidations=identity_invalidations,
         recent_oracle_invalidations=oracle_invalidations,
         recommendations=recommendations,
+        active_policy=CalibrationService.policy_to_schema(active_policy_row) if active_policy_row is not None else None,
     )
 
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from parallax.db.models import (
     CandidateDecisionSnapshot,
+    DecisionLedgerRecord,
     OpportunityCandidate,
     SolverAuditRecordModel,
 )
@@ -14,6 +15,7 @@ from parallax.shared.schemas import (
     CourtAssessment,
     CourtDecision,
     DecisionSnapshot,
+    DecisionLedgerEntry,
     OutcomeStateSpace,
     OpportunityType,
     PayoffMatrix,
@@ -161,6 +163,7 @@ class CandidateRepository:
         relation_evidence: RelationEvidenceResponse | None,
         simulation_result: SimulationResult | None,
         court_assessment: CourtAssessment | None,
+        decision_ledger_entry: DecisionLedgerEntry | None = None,
         evaluated_at: datetime | None = None,
         snapshot_version: str = "decision-snapshot-v1",
     ) -> CandidateDecisionSnapshot:
@@ -173,15 +176,57 @@ class CandidateRepository:
         snapshot.relation_evidence = relation_evidence.model_dump() if relation_evidence is not None else None
         snapshot.simulation_result = simulation_result.model_dump() if simulation_result is not None else None
         snapshot.court_assessment = court_assessment.model_dump() if court_assessment is not None else None
+        if decision_ledger_entry is not None:
+            payload = decision_ledger_entry.model_dump(mode="json")
+        else:
+            payload = None
+        snapshot.decision_ledger_entry = payload
         snapshot.snapshot_version = snapshot_version
         snapshot.evaluated_at = evaluated_at or datetime.now(timezone.utc)
         self._session.flush()
         return snapshot
 
+    def append_decision_ledger_entry(
+        self,
+        candidate_id: str,
+        *,
+        run_id: str | None,
+        decision_ledger_entry: DecisionLedgerEntry,
+    ) -> DecisionLedgerRecord:
+        row = DecisionLedgerRecord(
+            candidate_id=uuid.UUID(candidate_id),
+            run_id=run_id,
+            evaluated_at=decision_ledger_entry.evaluated_at,
+            decision=decision_ledger_entry.decision.value,
+            source_of_truth=decision_ledger_entry.source_of_truth,
+            fallback_status=decision_ledger_entry.fallback_status,
+            model_version=decision_ledger_entry.model_version,
+            confidence=decision_ledger_entry.confidence,
+            score=decision_ledger_entry.score,
+            input_packet=decision_ledger_entry.input_packet.model_dump(mode="json")
+            if decision_ledger_entry.input_packet is not None
+            else None,
+            relation_proof=decision_ledger_entry.relation_proof.model_dump(mode="json")
+            if decision_ledger_entry.relation_proof is not None
+            else None,
+            execution_evidence=decision_ledger_entry.execution_evidence.model_dump(mode="json")
+            if decision_ledger_entry.execution_evidence is not None
+            else None,
+            blocking_reason=decision_ledger_entry.blocking_reason,
+            counterexamples=[item.model_dump(mode="json") for item in decision_ledger_entry.counterexamples],
+            metadata_json=decision_ledger_entry.metadata,
+        )
+        self._session.add(row)
+        self._session.flush()
+        return row
+
     @staticmethod
     def snapshot_to_schema(row: CandidateDecisionSnapshot | None) -> DecisionSnapshot | None:
         if row is None:
             return None
+        ledger_payload = getattr(row, "decision_ledger_entry", None)
+        if hasattr(ledger_payload, "model_dump"):
+            ledger_payload = ledger_payload.model_dump(mode="json")
         return DecisionSnapshot(
             candidate_id=str(row.candidate_id),
             run_id=row.run_id,
@@ -195,6 +240,50 @@ class CandidateRepository:
             court_assessment=CourtAssessment.model_validate(row.court_assessment)
             if row.court_assessment
             else None,
+            decision_ledger_entry=DecisionLedgerEntry.model_validate(ledger_payload)
+            if isinstance(ledger_payload, dict)
+            else None,
             snapshot_version=row.snapshot_version,
             evaluated_at=row.evaluated_at,
+        )
+
+    def list_decision_ledger_entries(self, candidate_id: str, *, limit: int = 100) -> list[DecisionLedgerEntry]:
+        rows = (
+            self._session.query(DecisionLedgerRecord)
+            .filter_by(candidate_id=uuid.UUID(candidate_id))
+            .order_by(DecisionLedgerRecord.evaluated_at.desc(), DecisionLedgerRecord.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [self._decision_ledger_to_schema(row) for row in rows]
+
+    @staticmethod
+    def _decision_ledger_to_schema(row: DecisionLedgerRecord) -> DecisionLedgerEntry:
+        from parallax.shared.schemas import (
+            CourtDecision,
+            Counterexample,
+            DecisionLedgerEntry,
+            EvidencePacket,
+            ExecutionEvidence,
+            RelationProof,
+        )
+
+        return DecisionLedgerEntry(
+            candidate_id=str(row.candidate_id),
+            run_id=row.run_id,
+            evaluated_at=row.evaluated_at,
+            decision=CourtDecision(row.decision),
+            source_of_truth=row.source_of_truth,
+            fallback_status=row.fallback_status,
+            model_version=row.model_version,
+            confidence=row.confidence,
+            score=row.score,
+            input_packet=EvidencePacket.model_validate(row.input_packet) if row.input_packet else None,
+            relation_proof=RelationProof.model_validate(row.relation_proof) if row.relation_proof else None,
+            execution_evidence=ExecutionEvidence.model_validate(row.execution_evidence)
+            if row.execution_evidence
+            else None,
+            blocking_reason=row.blocking_reason,
+            counterexamples=[Counterexample.model_validate(item) for item in (row.counterexamples or [])],
+            metadata=row.metadata_json or {},
         )

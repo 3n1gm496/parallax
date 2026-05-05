@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from parallax.execution.replay_stats import ReplayStats
 from parallax.shared.schemas import (
-    CourtAssessment,
-    CourtDecision,
     Leg,
-    OpportunityType,
     PayoffMatrix,
     RiskScore,
     Scenario,
@@ -216,7 +212,7 @@ def test_court_evaluate_with_replay_persists_replay_model():
              "source_mismatch": False, "ambiguity_level": "low",
              "ambiguity_terms": [], "shared_ambiguity_terms": [],
          }):
-        decision = svc.evaluate_with_replay("cand-1", run_id=None)
+        svc.evaluate_with_replay("cand-1", run_id=None)
 
     svc._simulator.simulate_replay.assert_called_once_with("cand-1")
     svc._repo.update_decision.assert_called_once()

@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from parallax.db.models import IdentityBenchmarkCase, RawMarket
 from parallax.identity.cluster_engine import ClusterEngine
-from parallax.identity.embedding_provider import TokenVectorProvider
 
 
 @dataclass
@@ -37,7 +36,7 @@ class BenchmarkResult:
 class BenchmarkRunner:
     def __init__(self, session: Session) -> None:
         self._session = session
-        self._engine = ClusterEngine(session, embedding_provider=TokenVectorProvider())
+        self._engine = ClusterEngine(session)
 
     def evaluate_all(self) -> BenchmarkResult:
         cases = self._session.query(IdentityBenchmarkCase).all()

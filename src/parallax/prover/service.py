@@ -11,7 +11,8 @@ from parallax.candidates.evidence import (
 )
 from parallax.config import settings
 from parallax.db.models import CompiledContract, CompiledProposition, RawMarket
-from parallax.detection.proposal_generator import RelationProposalGenerator
+from parallax.detection.hypothesis_generator import RelationHypothesisGenerator
+from parallax.detection.proposal_generator import RelationProposal, RelationProposalGenerator
 from parallax.detection.semantic import SemanticRelationAnalyzer
 from parallax.detection.semantic_veto import PartitionReviewResult, SemanticVeto
 from parallax.event_frames.frame_builder import EventFrameBuilder
@@ -32,6 +33,25 @@ from parallax.shared.schemas import (
 class RelationPipelineService:
     _CREATED_BY_LOGIC = "logic_engine"
     _CREATED_BY_SEMANTIC = "semantic_relation_analyzer"
+    _PROPOSAL_PRIORITY: dict[RelationType, int] = {
+        RelationType.EQUIVALENT: 0,
+        RelationType.DUPLICATE: 1,
+        RelationType.MUTUALLY_EXCLUSIVE: 2,
+        RelationType.EXHAUSTIVE_PARTITION: 3,
+        RelationType.SUBSET: 4,
+        RelationType.SUPERSET: 4,
+        RelationType.INVERSE: 5,
+        RelationType.SAME_EVENT_DIFFERENT_SOURCE: 6,
+        RelationType.SAME_EVENT_DIFFERENT_ORACLE: 6,
+        RelationType.SAME_EVENT_DIFFERENT_DEADLINE: 6,
+        RelationType.SAME_EVENT_INDEPENDENT: 7,
+        RelationType.RELATED_BUT_NOT_TRADEABLE: 8,
+        RelationType.SAME_EVENT_FAMILY: 9,
+    }
+    _SOURCE_PRIORITY = {
+        "hypothesis_generator": 0,
+        "frame": 1,
+    }
 
     def __init__(
         self,
@@ -43,6 +63,7 @@ class RelationPipelineService:
         self._session = session
         self._graph_repo = graph_repo
         self._proposal_generator = RelationProposalGenerator()
+        self._hypothesis_generator = RelationHypothesisGenerator()
         self._frame_builder = EventFrameBuilder(session)
         self._logic_engine = LogicEngine()
         self._semantic = semantic_analyzer
@@ -62,7 +83,13 @@ class RelationPipelineService:
             for proposition in [self._get_proposition(market.id)]
             if proposition is not None
         }
-        proposals = self._proposal_generator.generate(markets=markets, propositions=propositions, frame_ids=frame_ids)
+        frame_proposals = self._proposal_generator.generate(
+            markets=markets, propositions=propositions, frame_ids=frame_ids
+        )
+        hypothesis_proposals = self._hypothesis_generator.generate(
+            markets=markets, propositions=propositions, frame_ids=frame_ids
+        )
+        proposals = self._select_primary_proposals(frame_proposals + hypothesis_proposals)
 
         added = 0
         for proposal in proposals:
@@ -108,6 +135,7 @@ class RelationPipelineService:
                     contract_a,
                     contract_b,
                     proposed_relation=decision.relation_type,
+                    hypothesis_context=proposal.semantic_question,
                 )
                 if classification is not None:
                     reviewed_type = classification.relation_type
@@ -186,6 +214,21 @@ class RelationPipelineService:
             added += 1
         added += await self._persist_partition_sets(markets, propositions, frame_ids)
         return added
+
+    def _select_primary_proposals(self, proposals: list[RelationProposal]) -> list[RelationProposal]:
+        selected: dict[tuple[str, str], RelationProposal] = {}
+        for proposal in proposals:
+            pair_key = tuple(sorted((proposal.from_market_id, proposal.to_market_id)))
+            current = selected.get(pair_key)
+            if current is None or self._proposal_score(proposal) < self._proposal_score(current):
+                selected[pair_key] = proposal
+        return list(selected.values())
+
+    def _proposal_score(self, proposal: RelationProposal) -> tuple[int, float, int, str]:
+        relation_priority = self._PROPOSAL_PRIORITY.get(proposal.proposed_relation_type, 99)
+        source_priority = self._SOURCE_PRIORITY.get(getattr(proposal, "hypothesis_source", "frame"), 50)
+        confidence = -float(getattr(proposal, "confidence", 0.0))
+        return (relation_priority, confidence, source_priority, proposal.proposed_relation_type.value)
 
     async def _persist_partition_sets(
         self,

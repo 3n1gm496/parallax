@@ -61,6 +61,7 @@ class SemanticRelationAnalyzer:
         contract_b: ContractSchema,
         *,
         proposed_relation: RelationType | None = None,
+        hypothesis_context: str | None = None,
     ) -> RelationClassification | None:
         if (
             contract_a.compiler_confidence < self._min_contract_confidence
@@ -68,11 +69,18 @@ class SemanticRelationAnalyzer:
         ):
             return None
 
-        proposal_text = f"\n\n## Proposed relation\n{proposed_relation.value}" if proposed_relation is not None else ""
+        if hypothesis_context:
+            # Typed hypothesis: LLM receives precise logical claim to verify/refute
+            relation_hint = f"\n\n## Hypothesis to evaluate\n{hypothesis_context}"
+        elif proposed_relation is not None:
+            relation_hint = f"\n\n## Proposed relation\n{proposed_relation.value}"
+        else:
+            relation_hint = ""
+
         user_content = (
             f"## Market A Contract\n{json.dumps(contract_a.model_dump(), indent=2)}\n\n"
             f"## Market B Contract\n{json.dumps(contract_b.model_dump(), indent=2)}"
-            f"{proposal_text}"
+            f"{relation_hint}"
         )
 
         response = await self._client.messages.create(

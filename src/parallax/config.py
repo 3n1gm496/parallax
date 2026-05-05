@@ -35,9 +35,23 @@ class Settings(BaseSettings):
     runtime_max_exposure: float = 1000.0
     runtime_max_daily_loss: float = 250.0
     runtime_max_candidate_concurrency: int = 10
+    # Execution Engine Config
+    runtime_dry_run: bool = True
+    polymarket_private_key: str = ""
+    polymarket_funder: str = ""
+    polymarket_chain_id: int = 137
     persist_market_relations_compat: bool = False
+    runtime_enable_stream_trigger: bool = False
 
-    # Orderbook reality layer
+    # Replay Engine Config
+    runtime_recording_mode: bool = False
+    runtime_replay_mode: bool = False
+    runtime_replay_file: str = ""
+    runtime_replay_speed_factor: float = 0.0  # 0.0 = max speed, 1.0 = real-time
+    
+    # Risk Management / Unwind Engine
+    runtime_auto_unwind_enabled: bool = True
+    runtime_max_unwind_slippage: float = 0.05  # 5% max slippage on emergency dump
     orderbook_enabled: bool = False
     orderbook_snapshot_ttl_seconds: float = 45.0
     orderbook_fetch_timeout_seconds: float = 5.0
@@ -45,6 +59,21 @@ class Settings(BaseSettings):
     court_min_depth_size: float = 10.0
     court_partial_fill_inversion_threshold: float = 0.4
     kalshi_api_key: str = ""
+    kalshi_api_secret: str = ""
+    polymarket_clob_ws_url: str = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+    kalshi_ws_url: str = "wss://api.elections.kalshi.com/trade-api/ws/v2"
+    ws_reconnect_max_attempts: int = 10
+    ws_reconnect_base_delay_seconds: float = 1.0
+
+    # ── Neo4j Knowledge Graph ─────────────────────────────────────────────────
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "parallax"
+
+    # ── Semantic Agent (NLP) ──────────────────────────────────────────────────
+    semantic_agent_model: str = "all-MiniLM-L6-v2"
+    semantic_agent_min_similarity: float = 0.88
+    semantic_agent_scan_interval_seconds: int = 1800  # Run every 30 minutes
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -66,10 +95,12 @@ class Settings(BaseSettings):
         return [item.strip() for item in self.api_cors_allowed_origins.split(",") if item.strip()]
 
     def validate_runtime_safety(self) -> None:
+        if not self.api_auth_token.strip() or self.api_auth_token == "placeholder":
+            if self.app_env.lower() != "dev":
+                raise RuntimeError("API_AUTH_TOKEN is required and cannot be 'placeholder' outside dev mode")
+        
         if self.app_env.lower() == "dev":
             return
-        if not self.api_auth_token.strip():
-            raise RuntimeError("API_AUTH_TOKEN is required outside dev mode")
         if not self.api_require_auth_for_reads:
             raise RuntimeError("API_REQUIRE_AUTH_FOR_READS must be enabled outside dev mode")
         if self.api_docs_enabled:

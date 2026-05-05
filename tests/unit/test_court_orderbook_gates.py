@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import pytest
-from unittest.mock import MagicMock
 
 from parallax.court.service import CourtService
-from parallax.shared.schemas import SimulationResult, CourtDecision, CourtAssessment
+from parallax.shared.schemas import SimulationResult
 
 
 def _sim(

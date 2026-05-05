@@ -3,9 +3,10 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from parallax.candidates.repository import CandidateRepository
+from parallax.certificates.service import CertificateService
 from parallax.config import settings
 from parallax.db.models import OpportunityCandidate, PaperPosition
-from parallax.shared.schemas import CourtDecision, PayoffMatrix
+from parallax.shared.schemas import CourtDecision, PayoffMatrix, TradeProofCertificateStatus
 
 
 class TrackerService:
@@ -14,6 +15,7 @@ class TrackerService:
     def __init__(self, session: Session) -> None:
         self._session = session
         self._candidate_repo = CandidateRepository(session)
+        self._certificates = CertificateService(session)
 
     def open_position(self, candidate_id: str) -> PaperPosition | None:
         """Open a paper position for a candidate. Returns None if already open."""
@@ -34,11 +36,15 @@ class TrackerService:
             raise ValueError(f"Candidate {candidate_id} not found")
         if candidate.court_decision != CourtDecision.APPROVED.value:
             return None
+        certificate = self._certificates.get_for_candidate(candidate_id)
+        if certificate is None or certificate.certificate_status != TradeProofCertificateStatus.ISSUED.value:
+            return None
 
         matrix = PayoffMatrix.model_validate(candidate.payoff_matrix)
         position = PaperPosition(
             id=uuid.uuid4(),
             candidate_id=uuid.UUID(candidate_id),
+            certificate_id=certificate.id,
             status="OPEN",
             legs_json=[leg.model_dump() for leg in matrix.legs],
         )

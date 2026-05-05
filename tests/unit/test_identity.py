@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 from parallax.identity.event_repository import EventRepository
 from parallax.identity.service import IdentityService
+from parallax.identity.v3_service import IdentityV3Service
 from parallax.db.models import CanonicalEvent, MarketEventLink, RawMarket
 from parallax.shared.schemas import IdentityResolutionStatus
 
@@ -227,3 +228,18 @@ class TestIdentityService:
         assert result["selected_event"] is event
         assert result["status"] == IdentityResolutionStatus.VERIFIED
         assert result["selected_provenance"]["identity_status"] == IdentityResolutionStatus.VERIFIED.value
+
+    def test_identity_v3_bundle_marks_primary_vs_degraded(self):
+        market = _make_market(id="pm:bundle-1")
+        bundle = IdentityV3Service._build_resolution_bundle(
+            market=market,
+            retrieval_candidates=[{"candidate_event_id": "event-1", "score": 1.0}],
+            rerank_result={"selected_event_id": "event-1", "selected_score": 1.0},
+            cluster_governance={"cluster_id": "cluster-1", "blocking_reasons": []},
+            selected_cluster_id="cluster-1",
+            unresolved_cluster_ids=[],
+        )
+
+        assert bundle.source_of_truth == "primary_proof_based"
+        assert bundle.fallback_status == "none"
+        assert bundle.resolved_cluster_ids == ["cluster-1"]

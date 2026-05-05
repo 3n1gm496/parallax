@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from parallax.db.models import RawMarket
+from parallax.execution.schemas import OrderbookSnapshot
+from sqlalchemy.orm import Session
 from parallax.shared.schemas import (
     IdentityResolutionStatus,
     LogicalRelationSchema,
@@ -13,7 +15,6 @@ from parallax.shared.schemas import (
     PayoffMatrix,
     ProofObject,
     RelationEvidenceResponse,
-    RelationType,
     SolverAuditRecord,
 )
 from parallax.solver.classifier import FalseArbitrageClassifier
@@ -36,9 +37,33 @@ class SolverResult:
     audit_record: SolverAuditRecord
 
 
+@dataclass(slots=True)
+class SolverDiagnostics:
+    solver_called: bool = False
+    solver_skip_reason: str | None = None
+    solver_none_reason: str | None = None
+    valid_state_count: int = 0
+    impossible_state_count: int = 0
+    displayed_edge: float | None = None
+    executable_edge: float | None = None
+    proof_status: str | None = None
+    false_arbitrage_label: str | None = None
+    executable_pricing_used: bool = False
+    relation_types: list[str] = field(default_factory=list)
+    relation_set_keys: list[str] = field(default_factory=list)
+    identity_status: IdentityResolutionStatus = IdentityResolutionStatus.UNRESOLVED
+    identity_version: str = "identity-v2"
+
+
+@dataclass(slots=True)
+class SolverDecision:
+    result: SolverResult | None
+    diagnostics: SolverDiagnostics
+
+
 class GeneralizedPayoffSolver:
-    def __init__(self, *, friction_bps: int | None = None) -> None:
-        self._policy = build_solver_policy(friction_bps=friction_bps)
+    def __init__(self, *, friction_bps: int | None = None, session: Session | None = None) -> None:
+        self._policy = build_solver_policy(friction_bps=friction_bps, session=session)
         self._encoder = RelationConstraintEncoder()
         self._state_space = OutcomeStateSpaceBuilder()
         self._payoff = PayoffMatrixGenerator()
@@ -56,25 +81,56 @@ class GeneralizedPayoffSolver:
         relation_evidence: RelationEvidenceResponse | None,
         relation_sets: list[LogicalRelationSetSchema] | None = None,
         relations: list[LogicalRelationSchema] | None = None,
-        executable_prices: dict[str, float] | None = None,
+        orderbooks: dict[str, OrderbookSnapshot] | None = None,
     ) -> SolverResult | None:
+        return self.solve_with_trace(
+            markets=markets,
+            relation_evidence=relation_evidence,
+            relation_sets=relation_sets,
+            relations=relations,
+            orderbooks=orderbooks,
+        ).result
+
+    def solve_with_trace(
+        self,
+        *,
+        markets: list[RawMarket],
+        relation_evidence: RelationEvidenceResponse | None,
+        relation_sets: list[LogicalRelationSetSchema] | None = None,
+        relations: list[LogicalRelationSchema] | None = None,
+        orderbooks: dict[str, OrderbookSnapshot] | None = None,
+    ) -> SolverDecision:
         encoded = self._encoder.encode(
             markets=markets,
             relation_evidence=relation_evidence,
             relation_sets=relation_sets,
             relations=relations,
-            execution_context={"executable_prices": executable_prices or {}},
+            execution_context={"orderbooks": orderbooks or {}},
+        )
+        diagnostics = SolverDiagnostics(
+            solver_called=True,
+            relation_types=list(encoded.relation_types),
+            relation_set_keys=list(encoded.relation_set_keys),
+            identity_status=encoded.identity_status,
+            identity_version=encoded.identity_version,
         )
         if not encoded.constraints:
-            return None
+            diagnostics.solver_none_reason = "no_constraints_encoded"
+            return SolverDecision(result=None, diagnostics=diagnostics)
         if (
             self._policy.require_verified_identity_for_tradeable
-            and encoded.identity_status != IdentityResolutionStatus.VERIFIED
+            and (
+                encoded.identity_status != IdentityResolutionStatus.VERIFIED
+                or not encoded.identity_version.startswith("identity-v3")
+            )
         ):
-            return None
+            diagnostics.solver_none_reason = "identity_policy_rejected"
+            return SolverDecision(result=None, diagnostics=diagnostics)
 
         market_ids = [market.id for market in markets]
         state_space = self._state_space.enumerate(market_ids=market_ids, constraints=encoded.constraints)
+        diagnostics.valid_state_count = len(state_space.valid_states)
+        diagnostics.impossible_state_count = len(state_space.impossible_states)
         primary_relation = encoded.constraints[0].relation_type
         fingerprint = self._fingerprint(markets, encoded.constraints, encoded.identity_version)
         payoff_result = self._payoff.build(
@@ -87,10 +143,11 @@ class GeneralizedPayoffSolver:
             identity_version=encoded.identity_version,
             relation_set_keys=encoded.relation_set_keys,
             assumptions=self._assumptions(encoded.identity_status, relation_evidence),
-            executable_prices=executable_prices,
+            orderbooks=orderbooks,
         )
         if payoff_result is None:
-            return None
+            diagnostics.solver_none_reason = "payoff_builder_returned_none"
+            return SolverDecision(result=None, diagnostics=diagnostics)
 
         false_label = self._classifier.classify(
             identity_status=encoded.identity_status,
@@ -99,10 +156,16 @@ class GeneralizedPayoffSolver:
             executable_edge=payoff_result.executable_edge,
             executable_pricing_used=payoff_result.executable_pricing_used,
         )
+        diagnostics.displayed_edge = payoff_result.displayed_edge
+        diagnostics.executable_edge = payoff_result.executable_edge
+        diagnostics.proof_status = payoff_result.proof.proof_status
+        diagnostics.false_arbitrage_label = false_label
+        diagnostics.executable_pricing_used = payoff_result.executable_pricing_used
         payoff_result.proof.false_arbitrage_label = false_label
         if false_label is not None:
             payoff_result.proof.proof_status = "false_arbitrage"
-        basket = self._optimizer.optimize(payoff_result.payoff_matrix, self._policy)
+            diagnostics.proof_status = "false_arbitrage"
+        basket = self._optimizer.optimize(payoff_result.payoff_matrix, state_space, self._policy)
         audit = SolverAuditRecord(
             constraint_fingerprint=fingerprint,
             solver_version=self.solver_version,
@@ -117,7 +180,7 @@ class GeneralizedPayoffSolver:
                 "false_arbitrage_label": false_label,
             },
         )
-        return SolverResult(
+        result = SolverResult(
             payoff_matrix=payoff_result.payoff_matrix,
             scenario_matrix=state_space,
             proof_object=payoff_result.proof,
@@ -127,6 +190,7 @@ class GeneralizedPayoffSolver:
             false_arbitrage_label=false_label,
             audit_record=audit,
         )
+        return SolverDecision(result=result, diagnostics=diagnostics)
 
     @staticmethod
     def _assumptions(

@@ -26,11 +26,13 @@ class SemanticVeto:
         contract_b: ContractSchema,
         *,
         proposed_relation: RelationType | None = None,
+        hypothesis_context: str | None = None,
     ) -> RelationClassification | None:
         return await self._analyzer.classify(
             contract_a,
             contract_b,
             proposed_relation=proposed_relation,
+            hypothesis_context=hypothesis_context,
         )
 
     async def review_partition(

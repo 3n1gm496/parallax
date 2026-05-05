@@ -3,14 +3,19 @@ import { api } from "../api/client";
 import { IdentityClusterReview } from "./IdentityClusterReview";
 import type {
   BacktestReplayReport,
+  CalibrationStatusResponse,
+  CandidateFunnelReport,
   EvaluationReport,
   ExecutionReport,
+  IdentityClusterQueueResponse,
   IdentityReviewQueueResponse,
   LogicalRelationSet,
   OpsMetrics,
   PolicyReport,
   ReadinessReport,
   RunProof,
+  SensitivityReport,
+  ShadowCandidateListResponse,
 } from "../types";
 
 const panelStyle: CSSProperties = {
@@ -54,6 +59,35 @@ function renderCounts(entries: Record<string, number>) {
   );
 }
 
+function renderReasonRows(rows: Array<{ reason: string; count: number }>) {
+  if (rows.length === 0) return <span style={{ color: "#9fb4ca" }}>No blockers recorded.</span>;
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      {rows.map((row) => (
+        <div
+          key={row.reason}
+          style={{ display: "flex", justifyContent: "space-between", gap: 12, color: "#dce7f5" }}
+        >
+          <span style={{ color: "#9fb4ca" }}>{row.reason}</span>
+          <strong>{row.count}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatCountPct(label: string, value: { count: number; pct: number | null }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, color: "#dce7f5" }}>
+      <span style={{ color: "#9fb4ca" }}>{label}</span>
+      <strong>
+        {value.count}
+        {value.pct != null ? ` (${value.pct.toFixed(1)}%)` : ""}
+      </strong>
+    </div>
+  );
+}
+
 export function OperationsView() {
   const [metrics, setMetrics] = useState<OpsMetrics | null>(null);
   const [readiness, setReadiness] = useState<ReadinessReport | null>(null);
@@ -64,6 +98,11 @@ export function OperationsView() {
   const [identityReview, setIdentityReview] = useState<IdentityReviewQueueResponse | null>(null);
   const [backtest, setBacktest] = useState<BacktestReplayReport | null>(null);
   const [execReport, setExecReport] = useState<ExecutionReport | null>(null);
+  const [calibration, setCalibration] = useState<CalibrationStatusResponse | null>(null);
+  const [identityClusters, setIdentityClusters] = useState<IdentityClusterQueueResponse | null>(null);
+  const [candidateFunnel, setCandidateFunnel] = useState<CandidateFunnelReport | null>(null);
+  const [shadowCandidates, setShadowCandidates] = useState<ShadowCandidateListResponse | null>(null);
+  const [sensitivity, setSensitivity] = useState<SensitivityReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -77,9 +116,14 @@ export function OperationsView() {
       api.ops.relationSets(),
       api.ops.policy(),
       api.ops.identityReview(),
+      api.ops.identityClusters(),
       api.ops.backtest(),
       api.ops.execution(),
-    ]).then(([metricsPayload, readinessPayload, runsPayload, evaluationPayload, relationSetPayload, policyPayload, identityReviewPayload, backtestPayload, execPayload]) => {
+      api.ops.calibration(),
+      api.ops.candidateFunnel(),
+      api.ops.shadowCandidates(),
+      api.ops.sensitivity(),
+    ]).then(([metricsPayload, readinessPayload, runsPayload, evaluationPayload, relationSetPayload, policyPayload, identityReviewPayload, identityClustersPayload, backtestPayload, execPayload, calibrationPayload, funnelPayload, shadowPayload, sensitivityPayload]) => {
         if (!cancelled) {
           setMetrics(metricsPayload);
           setReadiness(readinessPayload);
@@ -88,8 +132,13 @@ export function OperationsView() {
           setRelationSets(relationSetPayload.items);
           setPolicy(policyPayload);
           setIdentityReview(identityReviewPayload);
+          setIdentityClusters(identityClustersPayload);
           setBacktest(backtestPayload);
           setExecReport(execPayload);
+          setCalibration(calibrationPayload);
+          setCandidateFunnel(funnelPayload);
+          setShadowCandidates(shadowPayload);
+          setSensitivity(sensitivityPayload);
         }
       })
       .catch((e: unknown) => {
@@ -126,6 +175,7 @@ export function OperationsView() {
           ["Audit events 24h", metrics.audit.events_last_24h],
           ["Candidate evals 24h", metrics.pipeline.candidate_evaluations_last_24h],
           ["Settlements 24h", metrics.pipeline.settlements_last_24h],
+          ["Verified clusters", identityClusters?.clusters.filter((row) => row.confidence >= 0.75).length ?? 0],
         ].map(([label, value]) => (
           <div key={String(label)} style={statCardStyle}>
             <div style={{ color: "#9fb4ca", fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase" }}>
@@ -135,6 +185,136 @@ export function OperationsView() {
           </div>
         ))}
       </section>
+
+      {candidateFunnel && shadowCandidates && sensitivity && (
+        <section style={{ display: "grid", gap: 16 }}>
+          <section
+            style={{
+              ...panelStyle,
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+              gap: 14,
+            }}
+          >
+            <div style={statCardStyle}>
+              <div style={{ color: "#9fb4ca", fontSize: 12, textTransform: "uppercase" }}>Candidate Funnel</div>
+              <div style={{ color: "#dce7f5", marginTop: 10, display: "grid", gap: 8 }}>
+                <div><strong>Run</strong> {candidateFunnel.run_id}</div>
+                {formatCountPct("Compiled", candidateFunnel.compilation.compiled)}
+                {formatCountPct("Verified identity", candidateFunnel.identity.verified)}
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Tradeable relations</span>
+                  <strong>{candidateFunnel.relations.tradeable_true}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Persisted candidates</span>
+                  <strong>{candidateFunnel.persistence.persisted_candidates}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div style={statCardStyle}>
+              <div style={{ color: "#9fb4ca", fontSize: 12, textTransform: "uppercase" }}>Top Blockers</div>
+              <div style={{ marginTop: 10 }}>{renderReasonRows(candidateFunnel.top_blockers)}</div>
+            </div>
+
+            <div style={statCardStyle}>
+              <div style={{ color: "#9fb4ca", fontSize: 12, textTransform: "uppercase" }}>Solver Diagnostics</div>
+              <div style={{ color: "#dce7f5", marginTop: 10, display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Solver called</span>
+                  <strong>{candidateFunnel.solver.solver_called}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Solver not called</span>
+                  <strong>{candidateFunnel.solver.solver_not_called}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Returned none</span>
+                  <strong>{candidateFunnel.solver.returned_none}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Threshold rejects</span>
+                  <strong>{candidateFunnel.solver.threshold_rejects}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div style={statCardStyle}>
+              <div style={{ color: "#9fb4ca", fontSize: 12, textTransform: "uppercase" }}>Preview</div>
+              <div style={{ color: "#dce7f5", marginTop: 10, display: "grid", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Positive displayed edge</span>
+                  <strong>{candidateFunnel.preview.positive_displayed_edge}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Positive executable edge</span>
+                  <strong>{candidateFunnel.preview.positive_executable_edge}</strong>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#9fb4ca" }}>Only identity blocked</span>
+                  <strong>{candidateFunnel.preview.failed_only_identity_unverified}</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section
+            style={{
+              display: "grid",
+              gridTemplateColumns: "minmax(0, 1.1fr) minmax(320px, 0.9fr)",
+              gap: 16,
+            }}
+          >
+            <div style={panelStyle}>
+              <h2 style={{ marginTop: 0, fontSize: 18 }}>Shadow Candidates</h2>
+              <div style={{ color: "#9fb4ca", marginBottom: 12 }}>
+                Top {Math.min(20, shadowCandidates.rows.length)} near-misses from run {shadowCandidates.run_id}
+              </div>
+              <div style={{ display: "grid", gap: 10 }}>
+                {shadowCandidates.rows.slice(0, 20).map((row) => (
+                  <div key={row.observation_id} style={statCardStyle}>
+                    <div style={{ color: "#dce7f5" }}>
+                      <strong>{row.relation_type}</strong> · {row.market_ids.join(" | ")}
+                    </div>
+                    <div style={{ color: "#9fb4ca", marginTop: 6 }}>
+                      blockers {row.blocking_gates.join(", ") || "none"} · minimal relaxation {row.minimal_relaxation.join(", ") || "none"}
+                    </div>
+                    <div style={{ color: "#bfd3ea", marginTop: 6 }}>
+                      displayed {formatMetric(row.displayed_edge)} · executable {formatMetric(row.executable_edge)} · dangerous {String(row.dangerous_relaxation)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gap: 16 }}>
+              <section style={panelStyle}>
+                <h2 style={{ marginTop: 0, fontSize: 18 }}>Sensitivity</h2>
+                <div style={{ color: "#9fb4ca", marginBottom: 12 }}>Diagnostic only. No production recommendation is applied automatically.</div>
+                <div style={{ display: "grid", gap: 14 }}>
+                  <div>
+                    <div style={{ color: "#9fb4ca", marginBottom: 8 }}>Threshold table</div>
+                    {renderCounts(Object.fromEntries(sensitivity.min_profit_thresholds.map((row) => [row.label, row.count])))}
+                  </div>
+                  <div>
+                    <div style={{ color: "#9fb4ca", marginBottom: 8 }}>Identity gate table</div>
+                    {renderCounts(Object.fromEntries(sensitivity.identity_gates.map((row) => [row.label, row.count])))}
+                  </div>
+                  <div>
+                    <div style={{ color: "#9fb4ca", marginBottom: 8 }}>Semantic gate table</div>
+                    {renderCounts(Object.fromEntries(sensitivity.semantic_thresholds.map((row) => [row.label, row.count])))}
+                  </div>
+                  <div>
+                    <div style={{ color: "#9fb4ca", marginBottom: 8 }}>Execution gate table</div>
+                    {renderCounts(Object.fromEntries(sensitivity.execution_modes.map((row) => [row.label, row.count])))}
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </section>
+      )}
 
       <IdentityClusterReview />
 
@@ -239,12 +419,17 @@ export function OperationsView() {
                   {String(readiness.controls.live_execution_enabled)} · read-only{" "}
                   {String(readiness.controls.degraded_read_only_mode)}
                 </div>
+              <div style={{ color: "#dce7f5" }}>
+                <strong>Semantic analysis</strong>: {readiness.checks.semantic_analysis.status} · provider{" "}
+                {readiness.checks.semantic_analysis.provider} · min confidence{" "}
+                {readiness.checks.semantic_analysis.min_relation_confidence ?? "n/a"}
+                {readiness.checks.semantic_analysis.reason ? ` · ${readiness.checks.semantic_analysis.reason}` : ""}
+              </div>
+              {calibration?.active_policy && (
                 <div style={{ color: "#dce7f5" }}>
-                  <strong>Semantic analysis</strong>: {readiness.checks.semantic_analysis.status} · provider{" "}
-                  {readiness.checks.semantic_analysis.provider} · min confidence{" "}
-                  {readiness.checks.semantic_analysis.min_relation_confidence ?? "n/a"}
-                  {readiness.checks.semantic_analysis.reason ? ` · ${readiness.checks.semantic_analysis.reason}` : ""}
+                  <strong>Active policy</strong>: {calibration.active_policy.policy_version} · status {calibration.active_policy.status}
                 </div>
+              )}
                 <div style={{ display: "grid", gap: 8 }}>
                   {Object.entries(readiness.checks.providers).map(([platform, check]) => (
                     <div key={platform} style={{ color: "#dce7f5" }}>
@@ -603,9 +788,20 @@ export function OperationsView() {
               )}
             </div>
           ))}
+          {Object.keys(execReport.execution_path_distribution).length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              <div style={{ color: "#86a0b8", fontSize: 11, marginBottom: 6, letterSpacing: "0.08em" }}>EXECUTION PATH DISTRIBUTION</div>
+              {Object.entries(execReport.execution_path_distribution).map(([path, count]) => (
+                <div key={path} style={{ display: "flex", justifyContent: "space-between", color: "#9fb4ca", marginBottom: 4 }}>
+                  <span>{path}</span>
+                  <strong style={{ color: "#dce7f5" }}>{count}</strong>
+                </div>
+              ))}
+            </div>
+          )}
           {Object.keys(execReport.execution_model_distribution).length > 0 && (
             <div style={{ marginTop: 10 }}>
-              <div style={{ color: "#86a0b8", fontSize: 11, marginBottom: 6, letterSpacing: "0.08em" }}>EXECUTION MODEL DISTRIBUTION</div>
+              <div style={{ color: "#86a0b8", fontSize: 11, marginBottom: 6, letterSpacing: "0.08em" }}>LEGACY EXECUTION MODEL DISTRIBUTION</div>
               {Object.entries(execReport.execution_model_distribution).map(([model, count]) => (
                 <div key={model} style={{ display: "flex", justifyContent: "space-between", color: "#9fb4ca", marginBottom: 4 }}>
                   <span>{model}</span>

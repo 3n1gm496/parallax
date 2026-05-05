@@ -3,10 +3,9 @@ from __future__ import annotations
 import uuid
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from parallax.execution.schemas import OrderbookLevel, OrderbookSide, OrderbookSnapshot
-from parallax.shared.schemas import SimulationResult
 
 
 def _make_snapshot(market_id: str, ask_price: float = 0.46, ask_size: float = 200.0) -> OrderbookSnapshot:

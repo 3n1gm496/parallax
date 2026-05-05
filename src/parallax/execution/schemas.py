@@ -5,7 +5,17 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-ExecutionMode = Literal["heuristic", "snapshot_based", "replay_based", "degraded"]
+ExecutionPath = Literal["primary_proof_based", "calibrated_model", "degraded_fallback", "offline_validation"]
+ExecutionMode = Literal[
+    "heuristic",
+    "snapshot_based",
+    "replay_based",
+    "degraded",
+    "primary_proof_based",
+    "calibrated_model",
+    "degraded_fallback",
+    "offline_validation",
+]
 
 
 class OrderbookLevel(BaseModel):
@@ -22,15 +32,15 @@ class OrderbookSide(BaseModel):
 
     def depth_at_or_better(self, price: float, side: Literal["bid", "ask"]) -> float:
         if side == "bid":
-            return sum(l.size for l in self.levels if l.price >= price)
-        return sum(l.size for l in self.levels if l.price <= price)
+            return sum(lv.size for lv in self.levels if lv.price >= price)
+        return sum(lv.size for lv in self.levels if lv.price <= price)
 
     def vwap(self, size: float, *, side: Literal["bid", "ask"] = "ask") -> float | None:
         """VWAP to fill `size` contracts from this side of the book."""
         if not self.levels or size <= 0:
             return None
         reverse = side == "bid"
-        sorted_levels = sorted(self.levels, key=lambda l: l.price, reverse=reverse)
+        sorted_levels = sorted(self.levels, key=lambda lv: lv.price, reverse=reverse)
         filled = 0.0
         cost = 0.0
         for level in sorted_levels:
@@ -42,6 +52,10 @@ class OrderbookSide(BaseModel):
         if filled < size - 1e-9:
             return None
         return cost / filled
+
+    def as_rust_levels(self) -> list[tuple[float, float]]:
+        """Export as list of (price, size) tuples for parallax_core functions."""
+        return [(lv.price, lv.size) for lv in self.levels]
 
 
 class OrderbookSnapshot(BaseModel):
@@ -66,6 +80,25 @@ class OrderbookSnapshot(BaseModel):
     @property
     def is_stale(self) -> bool:
         return self.staleness_seconds > 60.0
+
+    def to_rust_orderbook(self):
+        """
+        Returns a live parallax_core.Orderbook (Rust) populated with all current
+        price levels from this snapshot. Falls back to None if the Rust
+        module is unavailable (e.g. CI without maturin).
+        """
+        try:
+            import parallax_core  # type: ignore[import]
+            ob = parallax_core.Orderbook(self.market_id, self.platform)
+            for level in self.bids.levels:
+                ob.update_bid(level.price, level.size)
+            for level in self.asks.levels:
+                ob.update_ask(level.price, level.size)
+            ts_ns = int(self.captured_at.timestamp() * 1_000_000_000)
+            ob.set_last_update_ns(ts_ns)
+            return ob
+        except ImportError:
+            return None
 
 
 class DepthAnalysis(BaseModel):

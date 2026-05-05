@@ -14,6 +14,7 @@ from parallax.compiler.anthropic_provider import AnthropicCompilerProvider
 from parallax.compiler.service import CompilerService
 from parallax.config import settings
 from parallax.court.service import CourtService
+from parallax.shared.schemas import CourtDecision
 from parallax.divergence.service import DivergenceService
 from parallax.db.models import RunProofRecord
 from parallax.execution.fetcher import OrderbookFetcher
@@ -26,6 +27,7 @@ from parallax.ingestion.ingestor import IngestorService
 from parallax.ingestion.kalshi_adapter import KalshiAdapter
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.ops.runtime import build_readiness_payload
+from parallax.ops.candidate_funnel import CandidateDiagnosticsService
 from parallax.ops.schemas import RunSummary
 from parallax.ingestion.polymarket_adapter import PolymarketAdapter
 from parallax.detection.semantic import SemanticRelationAnalyzer
@@ -292,6 +294,23 @@ class PipelineRunner:
                 )
                 session.commit()
 
+                try:
+                    diagnostics_count = CandidateDiagnosticsService(session).rebuild_for_run(run_id, open_markets)
+                    audit_svc.record(
+                        "pipeline.candidate_funnel.complete",
+                        "pipeline",
+                        run_id,
+                        {
+                            "run_id": run_id,
+                            "config_fingerprint": config_fingerprint,
+                            "observations": diagnostics_count,
+                        },
+                    )
+                    session.commit()
+                except Exception as exc:
+                    log.warning("pipeline: candidate diagnostics failed: %s", exc)
+                    errors.append(f"candidate_diagnostics:{exc}")
+
                 candidate_repo = CandidateRepository(session)
                 court_svc = CourtService(session)
                 tracker_svc = TrackerService(session)
@@ -299,55 +318,106 @@ class PipelineRunner:
 
                 for candidate in candidate_repo.list_open():
                     cid = str(candidate.id)
+                    
+                    # [Opp 8] Tiered Risk Gates: Fast-Reject
+                    if not court_svc.fast_reject_check(cid):
+                        audit_svc.record(
+                            "pipeline.candidate.evaluated",
+                            "candidate",
+                            cid,
+                            {
+                                "decision": CourtDecision.REJECTED.value,
+                                "decision_path": "fast_reject",
+                                "run_id": run_id,
+                            },
+                        )
+                        continue
+
                     try:
                         snapshots: dict[str, OrderbookSnapshot | None] | None = None
                         if ob_fetcher is not None:
                             snapshots = await _fetch_candidate_snapshots(
                                 ob_fetcher, session, candidate
                             )
-                        with session.begin_nested():
-                            if snapshots is not None:
-                                for snap in snapshots.values():
-                                    if snap is not None:
-                                        _persist_snapshot_sync(session, snap)
-                                decision = court_svc.evaluate_with_snapshots(cid, snapshots, run_id=run_id)
-                            else:
-                                replay_stats = ReplayStatisticsService(session).get_stats(
-                                    candidate.opportunity_type
-                                )
-                                if replay_stats is not None:
-                                    decision = court_svc.evaluate_with_replay(cid, run_id=run_id)
-                                else:
-                                    decision = court_svc.evaluate(cid, run_id=run_id)
-                            snapshot = candidate_repo.snapshot_to_schema(candidate_repo.get_decision_snapshot(cid))
-                            simulation = snapshot.simulation_result if snapshot is not None else None
-                            audit_svc.record(
-                                "pipeline.candidate.evaluated",
-                                "candidate",
-                                cid,
-                                {
-                                    "decision": decision.value,
-                                    "simulated_pnl": simulation.simulated_pnl if simulation is not None else None,
-                                    "is_executable": simulation.is_executable if simulation is not None else None,
-                                    "run_id": run_id,
-                                },
+                        
+                        if snapshots is not None:
+                            for snap in snapshots.values():
+                                if snap is not None:
+                                    _persist_snapshot_sync(session, snap)
+                            decision = court_svc.evaluate_with_snapshots(cid, snapshots, run_id=run_id)
+                        else:
+                            replay_stats = ReplayStatisticsService(session).get_stats(
+                                candidate.opportunity_type
                             )
-                            if decision.value == "APPROVED" and simulation is not None and simulation.is_executable:
-                                position = tracker_svc.open_position(cid)
-                                if position is not None:
-                                    positions_opened += 1
+                            if replay_stats is not None:
+                                decision = court_svc.evaluate_with_replay(cid, run_id=run_id)
+                            else:
+                                decision = court_svc.evaluate(cid, run_id=run_id)
+                        
+                        snapshot = candidate_repo.snapshot_to_schema(candidate_repo.get_decision_snapshot(cid))
+                        simulation = snapshot.simulation_result if snapshot is not None else None
+                        audit_svc.record(
+                            "pipeline.candidate.evaluated",
+                            "candidate",
+                            cid,
+                            {
+                                "decision": decision.value,
+                                "simulated_pnl": simulation.simulated_pnl if simulation is not None else None,
+                                "is_executable": simulation.is_executable if simulation is not None else None,
+                                "run_id": run_id,
+                            },
+                        )
+                        # Broadcast candidate evaluation
+                        from parallax.ops.telemetry import broker
+                        import asyncio
+                        asyncio.create_task(broker.broadcast("candidate_evaluated", {
+                            "candidate_id": cid,
+                            # Fast-path risk score access (Bug #18)
+                            "risk_scores": candidate.risk_scores,
+                            # decision = court_svc.evaluate(cid, run_id=run_id)
+                        }))
+                        
+                        if decision.value == "APPROVED" and simulation is not None and simulation.is_executable:
+                            position = tracker_svc.open_position(cid)
+                            if position is not None:
+                                positions_opened += 1
+                                audit_svc.record(
+                                    "pipeline.position.opened",
+                                    "position",
+                                    str(position.id),
+                                    {"candidate_id": cid, "run_id": run_id},
+                                )
+                                asyncio.create_task(broker.broadcast("position_opened", {
+                                    "candidate_id": cid,
+                                    "position_id": str(position.id),
+                                    "simulated_pnl": simulation.simulated_pnl
+                                }))
+                            
+                            # Execute the basket if live execution is enabled
+                            if settings.runtime_live_execution_enabled:
+                                from parallax.execution.executor import ExecutionManager
+                                executor = ExecutionManager()
+                                basket = candidate.basket_json
+                                if basket and "selected_legs" in basket:
+                                    exec_report = await executor.execute_basket(basket["selected_legs"])
                                     audit_svc.record(
-                                        "pipeline.position.opened",
-                                        "position",
-                                        str(position.id),
-                                        {"candidate_id": cid, "run_id": run_id},
+                                        "pipeline.candidate.executed",
+                                        "candidate",
+                                        cid,
+                                        {"execution_report": exec_report, "run_id": run_id}
                                     )
-                            if decision.value == "WATCHLIST":
-                                candidates_watchlisted += 1
+                                    asyncio.create_task(broker.broadcast("basket_executed", {
+                                        "candidate_id": cid,
+                                        "report": exec_report
+                                    }))
+                        if decision.value == "WATCHLIST":
+                            candidates_watchlisted += 1
+                        
+                        session.commit() # Commit per candidate to avoid long transactions
+
                     except Exception as exc:
-                        log.warning("pipeline: candidate %s failed: %s", cid, exc)
-                        errors.append(f"candidate:{cid}:{exc}")
-                session.commit()
+                        log.warning("pipeline: candidate %s evaluation failed: %s", cid, exc)
+                        errors.append(f"evaluate:{cid}:{exc}")
 
                 try:
                     scanner = SettlementScannerService(session)

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import json
 from datetime import datetime
 from enum import Enum
@@ -77,6 +78,8 @@ class IdentityResolutionStatus(str, Enum):
 
 
 class IdentityType(str, Enum):
+    EQUIVALENT = "equivalent"
+    DUPLICATE = "duplicate"
     SAME_EVENT = "same_event"
     DUPLICATE_MARKET = "duplicate_market"
     NEAR_DUPLICATE = "near_duplicate"
@@ -139,6 +142,82 @@ class Counterexample(BaseModel):
     why_different: str
 
 
+class EvidencePacket(BaseModel):
+    packet_id: str | None = None
+    source_of_truth: Literal[
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "calibrated_model"
+    fallback_status: Literal["none", "degraded", "offline_validation"] = "none"
+    model_version: str = "evidence-packet-v1"
+    confidence: Probability | None = None
+    blocking_reason: str | None = None
+    counterexamples: list[Counterexample] = Field(default_factory=list)
+    evidence: dict[str, object] = Field(default_factory=dict)
+
+
+class RelationProof(EvidencePacket):
+    relation_type: RelationType | None = None
+    proof_status: Literal["verified", "rejected", "needs_review"] = "needs_review"
+    tradeable_relation: bool = False
+    relation_signals: dict[str, object] = Field(default_factory=dict)
+    identity_provenance: dict[str, object] | None = None
+    identity_status: IdentityResolutionStatus = IdentityResolutionStatus.UNRESOLVED
+    identity_version: str = "identity-v2"
+    frame_id: str | None = None
+    set_key: str | None = None
+    member_market_ids: list[str] = Field(default_factory=list)
+
+
+class IdentityResolutionBundle(EvidencePacket):
+    candidate_retrieval: dict[str, object] = Field(default_factory=dict)
+    rerank_result: dict[str, object] = Field(default_factory=dict)
+    cluster_governance: dict[str, object] = Field(default_factory=dict)
+    resolved_cluster_ids: list[str] = Field(default_factory=list)
+    unresolved_cluster_ids: list[str] = Field(default_factory=list)
+
+
+class ExecutionEvidence(EvidencePacket):
+    execution_model: str = "calibrated_model"
+    execution_path: Literal[
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "calibrated_model"
+    legacy_execution_model: str | None = None
+    quote_staleness_seconds: float | None = None
+    snapshot_ids: list[str] = Field(default_factory=list)
+    depth_support: bool | None = None
+    partial_fill_risk: float = 0.0
+    captured_quotes: list[dict[str, object]] = Field(default_factory=list)
+
+
+class DecisionLedgerEntry(BaseModel):
+    candidate_id: str
+    run_id: str | None = None
+    evaluated_at: datetime
+    decision: CourtDecision
+    source_of_truth: Literal[
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "calibrated_model"
+    fallback_status: Literal["none", "degraded", "offline_validation"] = "none"
+    model_version: str = "decision-ledger-v1"
+    confidence: Probability | None = None
+    score: float | None = None
+    input_packet: EvidencePacket | None = None
+    relation_proof: RelationProof | None = None
+    execution_evidence: ExecutionEvidence | None = None
+    blocking_reason: str | None = None
+    counterexamples: list[Counterexample] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
 class ContractSchema(BaseModel):
     yes_conditions: list[str]
     no_conditions: list[str]
@@ -158,6 +237,7 @@ class ContractSchema(BaseModel):
     time_scope: str | None = None
     oracle_focus: str | None = None
     oracle_scope: str | None = None
+    resolution_criteria: str | None = None
     resolution_exclusions: list[str] = Field(default_factory=list)
     cancellation_conditions: list[str] = Field(default_factory=list)
     polarity: Literal["positive", "negative", "unknown"] = "unknown"
@@ -199,6 +279,21 @@ class ContractSchema(BaseModel):
         if self.polarity == "unknown" and self.canonical_predicate:
             self.polarity = "negative" if str(self.canonical_predicate).startswith("not_") else "positive"
         return self
+
+    def semantic_hash(self) -> str:
+        """Compute a deterministic hash of the core semantic properties."""
+        payload = {
+            "yes_conditions": sorted(self.yes_conditions),
+            "no_conditions": sorted(self.no_conditions),
+            "canonical_subject": self.canonical_subject,
+            "canonical_predicate": self.canonical_predicate,
+            "canonical_object": self.canonical_object,
+            "threshold": self.threshold,
+            "time_scope": self.time_scope,
+            "resolution_criteria": self.resolution_criteria,
+            "resolution_exclusions": sorted(self.resolution_exclusions or []),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
 
 
 class CompiledPropositionSchema(BaseModel):
@@ -308,12 +403,15 @@ class CounterexampleRecord(BaseModel):
 
 class Leg(BaseModel):
     market_id: str
+    action: Literal["BUY", "SELL"] = "BUY"
     side: Literal["YES", "NO"] = "YES"
     price: Probability
     quantity: float = 1.0
     cost: float | None = None    # must be set explicitly when known; not auto-computed
+    max_size: float | None = None  # limits tranche size for Depth-of-Book
     outcome: str | None = None   # human-readable outcome label, e.g. "Biden wins"
     platform: str | None = None
+    token_id: str | None = None
 
 
 class Scenario(BaseModel):
@@ -361,6 +459,8 @@ class OutcomeStateSpace(BaseModel):
     valid_states: list[OutcomeState] = Field(default_factory=list)
     impossible_states: list[OutcomeState] = Field(default_factory=list)
     enumeration_mode: Literal["custom", "z3", "hybrid"] = "custom"
+    blocked_reason: str | None = None
+    breaking_state_ids: list[str] = Field(default_factory=list)
 
 
 class SolverPolicy(BaseModel):
@@ -384,13 +484,17 @@ class ProofObject(BaseModel):
     identity_version: str
     proof_status: Literal["verified", "degraded", "needs_review", "false_arbitrage"] = "verified"
     relation_types: list[RelationType] = Field(default_factory=list)
+    relation_ids: list[str] = Field(default_factory=list)
     relation_set_keys: list[str] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     executable_pricing_used: bool = False
     false_arbitrage_label: str | None = None
+    valid_states: list[OutcomeState] = Field(default_factory=list)
     impossible_scenarios: list[OutcomeState] = Field(default_factory=list)
     breaking_scenarios: list[Scenario] = Field(default_factory=list)
+    payoff_by_state: dict[str, float] = Field(default_factory=dict)
     audit_trail: list[dict[str, object]] = Field(default_factory=list)
+    evidence_packet: EvidencePacket | None = None
 
 
 class SolverAuditRecord(BaseModel):
@@ -506,11 +610,27 @@ class SimulationResult(BaseModel):
     venue_breakdown: dict[str, object] = Field(default_factory=dict)
     model_version: str = "heuristic-v3"
     # Snapshot-based execution fields (defaults keep backward compat with existing snapshots)
-    execution_model: Literal["heuristic", "snapshot_based", "replay_based", "degraded"] = "heuristic"
+    execution_model: Literal[
+        "heuristic",
+        "snapshot_based",
+        "replay_based",
+        "degraded",
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "heuristic"
+    execution_path: Literal[
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "calibrated_model"
     quote_staleness_seconds: float | None = None
     snapshot_ids: list[str] = Field(default_factory=list)
     depth_support: bool | None = None
     partial_fill_risk: float = 0.0
+    execution_evidence: ExecutionEvidence | None = None
 
 
 class DecisionGate(BaseModel):
@@ -532,6 +652,13 @@ class CourtAssessment(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     gates: list[DecisionGate] = Field(default_factory=list)
     policy_version: str = "court-v2"
+    decision_path: Literal[
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] = "calibrated_model"
+    evidence_packet: EvidencePacket | None = None
 
 
 class RelationEvidenceResponse(BaseModel):
@@ -564,6 +691,7 @@ class RelationEvidenceResponse(BaseModel):
     frame_id: str | None = None
     set_key: str | None = None
     member_market_ids: list[str] = Field(default_factory=list)
+    relation_proof: RelationProof | None = None
 
 
 class ResolutionType(str, Enum):
@@ -591,7 +719,16 @@ class CandidateSummary(BaseModel):
     total_cost: float
     court_decision: CourtDecision
     created_at: datetime
-    execution_model: Literal["heuristic", "snapshot_based", "replay_based", "degraded"] | None = None
+    execution_model: Literal[
+        "heuristic",
+        "snapshot_based",
+        "replay_based",
+        "degraded",
+        "primary_proof_based",
+        "calibrated_model",
+        "degraded_fallback",
+        "offline_validation",
+    ] | None = None
 
 
 class DecisionSnapshot(BaseModel):
@@ -601,6 +738,7 @@ class DecisionSnapshot(BaseModel):
     relation_evidence: RelationEvidenceResponse | None = None
     simulation_result: SimulationResult | None = None
     court_assessment: CourtAssessment | None = None
+    decision_ledger_entry: DecisionLedgerEntry | None = None
     snapshot_version: str = "decision-snapshot-v1"
     evaluated_at: datetime
 
@@ -610,12 +748,86 @@ class CandidateDetail(BaseModel):
     opportunity_type: OpportunityType
     market_ids: list[str]
     payoff_matrix: PayoffMatrix
+    scenario_matrix: OutcomeStateSpace | None = None
+    proof_object: ProofObject | None = None
+    basket: dict[str, object] | None = None
+    false_arbitrage_label: str | None = None
     risk_score: RiskScore | None
     decision_snapshot: DecisionSnapshot | None = None
     simulation_result: SimulationResult | None
     court_assessment: CourtAssessment | None = None
     relation_evidence: RelationEvidenceResponse | None = None
     court_decision: CourtDecision
+    created_at: datetime
+
+
+class TradeProofCertificateStatus(str, Enum):
+    DRAFT = "draft"
+    ISSUED = "issued"
+    INVALIDATED = "invalidated"
+    SUPERSEDED = "superseded"
+
+
+class TradeProofCertificate(BaseModel):
+    certificate_id: str
+    candidate_id: str
+    run_id: str | None = None
+    generated_at: datetime
+    certificate_version: str = "trade-proof-certificate-v1"
+    certificate_status: TradeProofCertificateStatus
+    market_data_snapshot_hash: str | None = None
+    compiled_contract_versions: list[str] = Field(default_factory=list)
+    contract_fingerprints: dict[str, str] = Field(default_factory=dict)
+    identity_evidence_ids: list[str] = Field(default_factory=list)
+    identity_status: IdentityResolutionStatus
+    identity_confidence: float | None = None
+    identity_provenance: dict[str, object] = Field(default_factory=dict)
+    identity_cluster_ids: list[str] = Field(default_factory=list)
+    relation_proof_ids: list[str] = Field(default_factory=list)
+    relation_set_ids: list[str] = Field(default_factory=list)
+    solver_proof_object_hash: str
+    payoff_matrix_hash: str
+    scenario_matrix_hash: str
+    orderbook_snapshot_ids: list[str] = Field(default_factory=list)
+    execution_model: str = "heuristic"
+    execution_simulation_hash: str | None = None
+    court_decision_snapshot_id: str | None = None
+    risk_score_version: str | None = None
+    policy_version: str | None = None
+    config_fingerprint: str | None = None
+    provider_fingerprints: dict[str, str] = Field(default_factory=dict)
+    invalidation_conditions: list[str] = Field(default_factory=list)
+    invalidation_reason: str | None = None
+    created_at: datetime
+    supersedes_certificate_id: str | None = None
+    degraded: bool = False
+
+
+class CalibrationRunReport(BaseModel):
+    calibration_run_id: str
+    status: str
+    sample_size: int
+    input_window_start: datetime | None = None
+    input_window_end: datetime | None = None
+    generated_at: datetime
+    active_policy_version: str | None = None
+    edge_capture: float | None = None
+    win_rate: float | None = None
+    false_positive_rate: float | None = None
+    identity_failure_rate: float | None = None
+    execution_miss_rate: float | None = None
+    oracle_divergence_rate: float | None = None
+    opportunity_type_performance: dict[str, float] = Field(default_factory=dict)
+
+
+class ActivePolicyVersionReport(BaseModel):
+    policy_version: str
+    status: str
+    provenance: dict[str, object] = Field(default_factory=dict)
+    court_thresholds: dict[str, float] = Field(default_factory=dict)
+    risk_weights: dict[str, float] = Field(default_factory=dict)
+    solver_penalties: dict[str, float] = Field(default_factory=dict)
+    execution_calibration: dict[str, float] = Field(default_factory=dict)
     created_at: datetime
 
 

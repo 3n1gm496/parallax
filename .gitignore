@@ -17,3 +17,5 @@ coverage/
 .serena/
 *.swp
 *.swo
+ui/dist/
+ui/node_modules/

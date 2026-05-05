@@ -109,7 +109,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["cluster_id"], ["event_identity_clusters.id"]),
         sa.ForeignKeyConstraint(["raw_market_id"], ["raw_markets.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("cluster_id", "canonical_event_id", name="uq_cluster_member"),
+        sa.UniqueConstraint("cluster_id", "raw_market_id", name="uq_cluster_member"),
     )
     op.create_index("ix_identity_cluster_members_cluster", "identity_cluster_members", ["cluster_id", "added_at"])
     op.create_index("ix_identity_cluster_members_event", "identity_cluster_members", ["canonical_event_id"])

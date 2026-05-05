@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from parallax.shared.schemas import RiskScore, SimulationResult
 
 
@@ -98,10 +97,8 @@ def test_assess_with_snapshots_uses_adjusted_risk_in_composite_gate():
     from unittest.mock import MagicMock, patch
     from parallax.court.service import CourtService
     from parallax.shared.schemas import (
-        CourtAssessment, CourtDecision, RiskScore, SimulationResult, PayoffMatrix,
-        Leg, Scenario, OpportunityType,
+        RiskScore, SimulationResult,
     )
-    from parallax.execution.schemas import OrderbookSnapshot
 
     base_risk = RiskScore.combine(
         oracle=0.05, deadline=0.02, semantic=0.1,
@@ -213,3 +210,4 @@ def test_decision_snapshot_persists_adjusted_risk():
     assert persisted_risk is not None
     assert persisted_risk.policy_version == "risk-v2-snapshot"
     assert persisted_risk.execution_risk == adjusted_risk.execution_risk
+    assert call_kwargs.get("decision_ledger_entry") is not None

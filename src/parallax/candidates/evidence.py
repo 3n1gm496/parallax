@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
-from parallax.db.models import IdentityMatchReview, LogicalRelationSet, MarketEventLink
+from parallax.db.models import EventIdentityCluster, IdentityClusterMember, IdentityMatchReview, LogicalRelationSet, MarketEventLink
 from parallax.graph.postgres_repository import PostgresGraphRepository
-from parallax.shared.schemas import IdentityResolutionStatus, RelationEvidenceResponse, RelationType
+from parallax.shared.schemas import IdentityResolutionStatus, RelationEvidenceResponse, RelationProof, RelationType
 
 
 _IDENTITY_STATUS_PRIORITY = {
@@ -36,6 +36,15 @@ def load_relation_evidence(session: Session, market_ids: list[str]) -> RelationE
         return None
     evidence = relation.get("evidence", {})
     identity_provenance = load_identity_provenance(session, market_ids)
+    relation_proof = _build_relation_proof(
+        relation_type=RelationType(relation["relation_type"]),
+        evidence=evidence,
+        confidence=relation["confidence"],
+        created_by=relation["created_by"],
+        identity_provenance=identity_provenance,
+        from_market_id=relation["from_market_id"],
+        to_market_id=relation["to_market_id"],
+    )
     return RelationEvidenceResponse(
         from_market_id=relation["from_market_id"],
         to_market_id=relation["to_market_id"],
@@ -66,6 +75,7 @@ def load_relation_evidence(session: Session, market_ids: list[str]) -> RelationE
         frame_id=evidence.get("frame_id", relation.get("frame_id")),
         set_key=evidence.get("set_key"),
         member_market_ids=evidence.get("member_market_ids", []),
+        relation_proof=relation_proof,
     )
 
 
@@ -78,6 +88,15 @@ def load_relation_set_evidence(session: Session, market_ids: list[str]) -> Relat
     identity_provenance = load_identity_provenance(session, market_ids)
     from_market_id = row.member_market_ids[0] if row.member_market_ids else market_ids[0]
     to_market_id = row.member_market_ids[1] if len(row.member_market_ids) > 1 else market_ids[-1]
+    relation_proof = _build_relation_proof(
+        relation_type=RelationType(row.relation_type),
+        evidence=evidence,
+        confidence=row.confidence,
+        created_by=row.created_by,
+        identity_provenance=identity_provenance,
+        from_market_id=from_market_id,
+        to_market_id=to_market_id,
+    )
     return RelationEvidenceResponse(
         from_market_id=from_market_id,
         to_market_id=to_market_id,
@@ -108,6 +127,7 @@ def load_relation_set_evidence(session: Session, market_ids: list[str]) -> Relat
         frame_id=evidence.get("frame_id", str(row.frame_id) if row.frame_id is not None else None),
         set_key=row.set_key,
         member_market_ids=list(row.member_market_ids or []),
+        relation_proof=relation_proof,
     )
 
 
@@ -136,6 +156,22 @@ def load_identity_provenance(session: Session, market_ids: list[str]) -> dict[st
         return None
 
     event_id, event_links = shared
+    cluster_ids = [
+        str(cluster_id)
+        for (cluster_id,) in (
+            session.query(IdentityClusterMember.cluster_id)
+            .filter(IdentityClusterMember.raw_market_id.in_(market_ids))
+            .distinct()
+            .all()
+        )
+    ]
+    cluster_rows = (
+        session.query(EventIdentityCluster)
+        .filter(EventIdentityCluster.id.in_([cluster_id for cluster_id, in session.query(IdentityClusterMember.cluster_id).filter(IdentityClusterMember.raw_market_id.in_(market_ids)).distinct().all()]))
+        .all()
+        if cluster_ids
+        else []
+    )
     reviews = (
         session.query(IdentityMatchReview)
         .filter(IdentityMatchReview.raw_market_id.in_(market_ids))
@@ -188,6 +224,8 @@ def load_identity_provenance(session: Session, market_ids: list[str]) -> dict[st
         "identity_confidence": _average_confidence(confidence_values),
         "identity_version": version,
         "identity_blocking_reason": "; ".join(sorted(set(blocking_reasons))) if blocking_reasons else None,
+        "cluster_ids": cluster_ids,
+        "cluster_types": [cluster.identity_type for cluster in cluster_rows],
         "links": {
             link.raw_market_id: {
                 "link_reason": link.link_reason,
@@ -244,6 +282,43 @@ def _average_confidence(values: list[float | None]) -> float | None:
     if not valid:
         return None
     return round(sum(valid) / len(valid), 4)
+
+
+def _build_relation_proof(
+    *,
+    relation_type: RelationType,
+    evidence: dict[str, object],
+    confidence: float,
+    created_by: str,
+    identity_provenance: dict[str, object] | None,
+    from_market_id: str,
+    to_market_id: str,
+) -> RelationProof:
+    return RelationProof(
+        packet_id=f"relation:{from_market_id}:{to_market_id}",
+        source_of_truth="primary_proof_based" if bool(evidence.get("tradeable_relation")) else "calibrated_model",
+        fallback_status="none" if bool(evidence.get("tradeable_relation")) else "degraded",
+        model_version=str(evidence.get("evidence_version", "relation-analysis-v1")),
+        confidence=confidence,
+        blocking_reason=evidence.get("abstention_reason"),
+        counterexamples=evidence.get("breaking_scenarios", []) or [],
+        evidence={
+            **evidence,
+            "created_by": created_by,
+            "from_market_id": from_market_id,
+            "to_market_id": to_market_id,
+        },
+        relation_type=relation_type,
+        proof_status=str(evidence.get("proof_status", "verified")),
+        tradeable_relation=bool(evidence.get("tradeable_relation", False)),
+        relation_signals=evidence.get("relation_signals", {}),
+        identity_provenance=identity_provenance,
+        identity_status=load_identity_status(identity_provenance),
+        identity_version=load_identity_version(identity_provenance),
+        frame_id=evidence.get("frame_id"),
+        set_key=evidence.get("set_key"),
+        member_market_ids=list(evidence.get("member_market_ids", []) or []),
+    )
 
 
 def _max_identity_status(statuses: list[IdentityResolutionStatus]) -> IdentityResolutionStatus:

@@ -42,6 +42,7 @@ class TestTrackerService:
         session.flush = MagicMock()
 
         svc = TrackerService(session)
+        svc._certificates.get_for_candidate = MagicMock(return_value=MagicMock(id=uuid.uuid4(), certificate_status="issued"))
         position = svc.open_position(str(candidate_id))
 
         assert position is not None
@@ -50,6 +51,19 @@ class TestTrackerService:
         assert session.get.return_value.court_decision == CourtDecision.PAPER_TRADE.value
         session.add.assert_called_once_with(position)
         session.flush.assert_called_once()
+
+    def test_open_position_returns_none_without_issued_certificate(self):
+        session = MagicMock()
+        candidate_id = uuid.uuid4()
+        session.query.return_value.filter_by.return_value.first.return_value = None
+        session.get.return_value = _candidate(candidate_id)
+        svc = TrackerService(session)
+        svc._certificates.get_for_candidate = MagicMock(return_value=None)
+
+        result = svc.open_position(str(candidate_id))
+
+        assert result is None
+        session.add.assert_not_called()
 
     def test_open_position_returns_none_if_already_open(self):
         session = MagicMock()

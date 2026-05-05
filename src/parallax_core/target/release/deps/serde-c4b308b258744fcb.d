@@ -1,0 +1,14 @@
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/serde-c4b308b258744fcb.d: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/serde-6571800b711d0fb2/out/private.rs
+
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/libserde-c4b308b258744fcb.rlib: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/serde-6571800b711d0fb2/out/private.rs
+
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/libserde-c4b308b258744fcb.rmeta: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/serde-6571800b711d0fb2/out/private.rs
+
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/lib.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/integer128.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/mod.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/de.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.228/src/private/ser.rs:
+/home/administrator/tools/parallax/src/parallax_core/target/release/build/serde-6571800b711d0fb2/out/private.rs:
+
+# env-dep:OUT_DIR=/home/administrator/tools/parallax/src/parallax_core/target/release/build/serde-6571800b711d0fb2/out

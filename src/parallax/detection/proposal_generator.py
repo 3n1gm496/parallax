@@ -15,6 +15,9 @@ class RelationProposal:
     confidence: float
     frame_id: str | None
     evidence: dict
+    # Optional typed hypothesis context for semantic review
+    semantic_question: str | None = None
+    hypothesis_source: str = "frame"
 
 
 class RelationProposalGenerator:
@@ -80,6 +83,6 @@ class RelationProposalGenerator:
             return RelationType.MUTUALLY_EXCLUSIVE, 0.65, {"rule": "partition_hint_signature"}
 
         if same_family and same_temporal:
-            return RelationType.SAME_EVENT_FAMILY, 0.95, {"rule": "same_frame_signature"}
+            return RelationType.SAME_EVENT_INDEPENDENT, 0.72, {"rule": "same_frame_family_candidate"}
 
         return RelationType.RELATED_BUT_NOT_TRADEABLE, 0.4, {"rule": "weak_frame_overlap"}

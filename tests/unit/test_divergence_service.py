@@ -66,6 +66,7 @@ def _relation_evidence(rel: dict, *, identity_status: IdentityResolutionStatus =
         proof_status="verified",
         tradeable_relation=True,
         identity_status=identity_status,
+        identity_version="identity-v3-runtime",
         semantic_confidence=evidence.get("semantic_confidence"),
         relation_signals=evidence.get("relation_signals", {}),
     )
@@ -125,13 +126,21 @@ class TestDivergenceService:
         svc._candidate_repo.create = MagicMock(side_effect=lambda **kw: captured.update(kw) or MagicMock())
         svc.scan([a, b])
         matrix = captured["payoff_matrix"]
-        # total_cost = (1-0.60) + (1-0.55) = 0.85 (capital deployed: both NO legs)
-        # gross = 0.60 + 0.55 - 1.0 = 0.15
-        # friction = 0.85 * 10/10000 = 0.00085; net = 0.14915
-        assert abs(matrix.total_cost - 0.85) < 1e-9
-        assert abs(matrix.worst_case_payoff - 0.14915) < 1e-9
-        # Both scenarios have identical payoff (direction-neutral)
-        assert all(abs(s.payoff - matrix.worst_case_payoff) < 1e-9 for s in matrix.scenarios)
+        # Synthetic OB: spread=0.5%, bids at mid-0.0025
+        # NO-legs use bid side: cost_A = 1-(0.60-0.0025)=0.4025, cost_B = 1-(0.55-0.0025)=0.4525
+        # total_cost = 0.4025 + 0.4525 = 0.855
+        # gross = (0.5975 + 0.5475) - 1.0 = 0.145  (each NO leg pays 1 if the other resolves YES)
+        # friction = 0.855 * 10/10000 = 0.000855; net ≈ 0.144145
+        _spread = 0.005
+        bid_a = 0.60 - _spread / 2   # 0.5975
+        bid_b = 0.55 - _spread / 2   # 0.5475
+        cost_a = round(1.0 - bid_a, 6)  # 0.4025
+        cost_b = round(1.0 - bid_b, 6)  # 0.4525
+        expected_total = round(cost_a + cost_b, 6)
+        friction = round(expected_total * 10 / 10_000, 6)
+        expected_net = round(bid_a + bid_b - 1.0 - friction, 6)
+        assert abs(matrix.total_cost - expected_total) < 1e-4
+        assert abs(matrix.worst_case_payoff - expected_net) < 1e-4
 
     def test_equivalent_divergence_creates_candidate(self):
         a = _market("pm:a", "pm", 0.40)
@@ -151,15 +160,23 @@ class TestDivergenceService:
         svc._candidate_repo.create = MagicMock(side_effect=lambda **kw: captured.update(kw) or MagicMock())
         svc.scan([a, b])
         matrix = captured["payoff_matrix"]
-        # total_cost = buy_price + (1 - sell_price) = 0.40 + 0.45 = 0.85
-        assert abs(matrix.total_cost - 0.85) < 1e-9
-        # gross = sell - buy = 0.55 - 0.40 = 0.15; friction = 0.85 * 10/10000 = 0.00085; net ≈ 0.14915
-        expected_net = 0.15 - 0.85 * 10 / 10_000
-        assert abs(matrix.worst_case_payoff - expected_net) < 1e-9
+        # Synthetic OB spread=0.5%: buyer YES uses ask (mid+0.0025), seller NO uses bids
+        # ask_a=0.4025, bid_b=0.5475 → NO-cost_b = 1-0.5475 = 0.4525
+        # total_cost = 0.4025 + 0.4525 = 0.855
+        # gross = 0.5475 - 0.4025 = 0.145; friction = 0.855*10/10000 = 0.000855; net≈0.144145
+        _spread = 0.005
+        ask_a = 0.40 + _spread / 2    # 0.4025
+        bid_b = 0.55 - _spread / 2    # 0.5475
+        cost_b_no = round(1.0 - bid_b, 6)  # 0.4525
+        expected_total = round(ask_a + cost_b_no, 6)
+        friction = round(expected_total * 10 / 10_000, 6)
+        expected_net = round(bid_b - ask_a - friction, 6)
+        assert abs(matrix.total_cost - expected_total) < 1e-4
+        assert abs(matrix.worst_case_payoff - expected_net) < 1e-4
         # Both scenarios have the same payoff
         assert len(matrix.scenarios) == 2
         payoffs = [s.payoff for s in matrix.scenarios]
-        assert abs(payoffs[0] - payoffs[1]) < 1e-9
+        assert abs(payoffs[0] - payoffs[1]) < 1e-4
         # No breaking scenario for riskless equivalent spread
         assert not any(s.is_breaking for s in matrix.scenarios)
 

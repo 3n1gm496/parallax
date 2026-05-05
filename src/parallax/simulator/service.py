@@ -1,5 +1,6 @@
 from __future__ import annotations
 from sqlalchemy.orm import Session
+from parallax.calibration.service import CalibrationService
 from parallax.candidates.repository import CandidateRepository
 from parallax.execution.estimator import DepthAwareExecutablePriceEstimator
 from parallax.execution.fill_simulator import DepthAwareFillSimulator
@@ -7,22 +8,22 @@ from parallax.execution.replay_stats import ReplayStatisticsService
 from parallax.execution.schemas import OrderbookSnapshot
 from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.shared.relation_signals import get_relation_signals
-from parallax.shared.schemas import OpportunityType, PayoffMatrix, RiskScore, SimulationResult
+from parallax.shared.schemas import ExecutionEvidence, OpportunityType, PayoffMatrix, RiskScore, SimulationResult
 
 
 class SimulatorService:
-    """Simulate a candidate trade with a lightweight execution heuristic.
+    """Simulate a candidate trade with calibrated execution paths.
 
-    The model is intentionally simple but no longer assumes perfect execution:
-    it degrades the stored post-friction payoff using a slippage estimate derived
-    from leg count and candidate risk, and reduces fill probability as structural
-    complexity rises.
+    The primary path is not a live execution engine. It remains a deterministic,
+    venue-aware simulator that degrades post-friction payoff using slippage and
+    fill estimates derived from candidate structure, risk, and market signals.
     """
 
     def __init__(self, session: Session) -> None:
         self._session = session
         self._repo = CandidateRepository(session)
         self._graph_repo = PostgresGraphRepository(session)
+        self._active_policy = CalibrationService(session).active_policy()
 
     def simulate(self, candidate_id: str) -> SimulationResult:
         candidate = self._repo.get(candidate_id)
@@ -49,10 +50,27 @@ class SimulatorService:
             slippage_cost + spread_cross_cost + stale_quote_cost + partial_fill_cost + non_execution_cost
         )
         simulated_pnl = matrix.worst_case_payoff - total_execution_drag
+        active_policy = getattr(self, "_active_policy", None)
+        if active_policy is not None:
+            edge_capture = float((active_policy.execution_calibration or {}).get("edge_capture", 1.0) or 1.0)
+            simulated_pnl = round(simulated_pnl * max(0.0, min(1.5, edge_capture or 1.0)), 6)
         risk_flags = self._risk_flags(opportunity_type, relation_signals, risk, platforms, fill_probability)
         note = (
             f"venue-aware execution model: displayed edge {matrix.worst_case_payoff:.6f}, "
             f"drag {total_execution_drag:.6f} across slippage/spread/stale/partial/non-execution"
+        )
+        execution_evidence = ExecutionEvidence(
+            source_of_truth="calibrated_model",
+            fallback_status="none",
+            model_version="execution-calibration-v1",
+            confidence=0.64 if risk is not None else 0.52,
+            blocking_reason=None,
+            evidence={
+                "slippage_bps": slippage_bps,
+                "fill_probability": fill_probability,
+                "risk_flags": risk_flags,
+                "relation_signals": relation_signals,
+            },
         )
 
         return SimulationResult(
@@ -73,6 +91,8 @@ class SimulatorService:
             execution_quality=self._execution_quality(fill_probability),
             risk_flags=risk_flags,
             venue_breakdown=self._venue_breakdown(platforms, opportunity_type),
+            execution_path="calibrated_model",
+            execution_evidence=execution_evidence,
         )
 
     def simulate_snapshot(
@@ -82,8 +102,8 @@ class SimulatorService:
     ) -> SimulationResult:
         """Snapshot-based simulation. Snapshots keyed by market_id.
 
-        Falls back to heuristic per-leg when snapshot is missing,
-        and marks execution_model as 'degraded' in that case.
+        Falls back to legacy per-leg estimates when snapshot data is missing,
+        and marks execution_model as degraded in that case.
         """
         candidate = self._repo.get(candidate_id)
         if candidate is None:
@@ -110,7 +130,7 @@ class SimulatorService:
             snap = snapshots.get(leg.market_id)
             if snap is None:
                 any_snapshot_missing = True
-                # Fallback: heuristic slippage for this leg
+                # Legacy fallback: per-leg slippage estimate when snapshot depth is unavailable
                 leg_slippage = leg.cost * 0.005 if leg.cost else 0.0
                 total_slippage += leg_slippage
                 continue
@@ -137,6 +157,7 @@ class SimulatorService:
             execution_model = "degraded"
         else:
             execution_model = "snapshot_based"
+        execution_path = "degraded_fallback" if any_snapshot_missing else "offline_validation"
 
         simulated_pnl = matrix.worst_case_payoff - total_slippage
         quote_staleness: float | None = None
@@ -167,6 +188,23 @@ class SimulatorService:
             risk_flags.append("insufficient_depth")
         if worst_partial_fill_risk > 0.5:
             risk_flags.append("high_partial_fill_risk")
+        execution_evidence = ExecutionEvidence(
+            source_of_truth="offline_validation" if not any_snapshot_missing else "degraded_fallback",
+            fallback_status="degraded" if any_snapshot_missing else "offline_validation",
+            model_version="snapshot-execution-v1",
+            confidence=0.86 if not any_snapshot_missing else 0.58,
+            blocking_reason="missing orderbook snapshot" if any_snapshot_missing else None,
+            evidence={
+                "snapshot_ids": snapshot_ids,
+                "all_supported": all_supported,
+                "any_stale": any_stale,
+                "worst_partial_fill_risk": worst_partial_fill_risk,
+            },
+            snapshot_ids=snapshot_ids,
+            quote_staleness_seconds=quote_staleness,
+            depth_support=all_supported,
+            partial_fill_risk=round(worst_partial_fill_risk, 4),
+        )
 
         return SimulationResult(
             candidate_id=candidate_id,
@@ -189,16 +227,18 @@ class SimulatorService:
                 [leg.platform or "unknown" for leg in matrix.legs], opportunity_type
             ),
             execution_model=execution_model,  # type: ignore[arg-type]
+            execution_path=execution_path,  # type: ignore[arg-type]
             quote_staleness_seconds=quote_staleness,
             snapshot_ids=snapshot_ids,
             depth_support=all_supported,
             partial_fill_risk=round(worst_partial_fill_risk, 4),
+            execution_evidence=execution_evidence,
         )
 
     def simulate_replay(self, candidate_id: str) -> SimulationResult:
         """Replay-calibrated simulation using settled position history for this opportunity type.
 
-        Falls back to heuristic execution_model when history is insufficient.
+        Falls back to the calibrated simulator when replay history is insufficient.
         """
         candidate = self._repo.get(candidate_id)
         if candidate is None:
@@ -218,6 +258,20 @@ class SimulatorService:
             f"replay-calibrated execution model: n_settled={stats.n_settled}, "
             f"win_rate={stats.win_rate:.3f}, mean_edge_capture={stats.mean_edge_capture:.3f}, "
             f"adjusted_pnl={adjusted_pnl:.6f}"
+        )
+        execution_evidence = ExecutionEvidence(
+            source_of_truth="offline_validation",
+            fallback_status="offline_validation",
+            model_version="replay-v1",
+            confidence=0.74,
+            blocking_reason=None,
+            evidence={
+                "n_settled": stats.n_settled,
+                "win_rate": stats.win_rate,
+                "mean_edge_capture": stats.mean_edge_capture,
+            },
+            execution_model="replay_based",
+            execution_path="offline_validation",
         )
 
         return SimulationResult(
@@ -239,7 +293,9 @@ class SimulatorService:
             risk_flags=heuristic.risk_flags,
             venue_breakdown=heuristic.venue_breakdown,
             execution_model="replay_based",
+            execution_path="offline_validation",
             model_version="replay-v1",
+            execution_evidence=execution_evidence,
         )
 
     @staticmethod
@@ -258,7 +314,8 @@ class SimulatorService:
             OpportunityType.SEMANTIC_ARBITRAGE,
             OpportunityType.SUBSET_VIOLATION,
         } else 0
-        cross_platform_bps = 5 if len(set(platforms)) > 1 else 0
+        # [Stage C] Structural Friction Alignment: 300 bps (3.0%) for cross-platform
+        cross_platform_bps = 300 if len(set(platforms)) > 1 else 0
         oracle_bps = 12 if relation_signals["oracle_mismatch"] else 0
         deadline_bps = 8 if relation_signals["deadline_mismatch"] else 0
         ambiguity_bps = 10 if relation_signals["ambiguity_level"] == "high" else 4 if relation_signals["ambiguity_level"] == "medium" else 0
@@ -302,7 +359,8 @@ class SimulatorService:
 
     @staticmethod
     def _spread_cross_cost(total_cost: float, platforms: list[str], opportunity_type: OpportunityType) -> float:
-        base = 0.0025 if len(set(platforms)) > 1 else 0.001
+        # [Stage C] Structural Friction Alignment: 3.0% base spread cost cross-platform
+        base = 0.03 if len(set(platforms)) > 1 else 0.001
         if opportunity_type in {
             OpportunityType.DUPLICATE_DIVERGENCE,
             OpportunityType.SEMANTIC_ARBITRAGE,

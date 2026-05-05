@@ -46,6 +46,18 @@ class RelationRuleEngine:
                     evidence={"logic_rule": "strict_equivalence"},
                     requires_semantic_review=True,
                 )
+            # Cross-platform relaxed equivalence: same subject/predicate/object
+            # but different proposition_family (platform-specific compiler output)
+            if same_subject and same_predicate and same_object:
+                return RelationRuleResult(
+                    relation_type=RelationType.EQUIVALENT,
+                    confidence=0.72,
+                    proof_status="needs_review",
+                    tradeable_relation=False,
+                    reasoning="cross-platform subject/predicate/object match — requires semantic confirmation",
+                    evidence={"logic_rule": "cross_platform_equivalence_candidate"},
+                    requires_semantic_review=True,
+                )
             return RelationRuleResult(
                 relation_type=RelationType.RELATED_BUT_NOT_TRADEABLE,
                 confidence=0.2,
@@ -113,13 +125,112 @@ class RelationRuleEngine:
                 requires_semantic_review=True,
             )
 
+        if proposed_relation == RelationType.INVERSE:
+            opposite_polarity = (
+                proposition_a.polarity != proposition_b.polarity
+                and proposition_a.polarity != "unknown"
+                and proposition_b.polarity != "unknown"
+            )
+            if same_subject and same_predicate and opposite_polarity:
+                return RelationRuleResult(
+                    relation_type=RelationType.INVERSE,
+                    confidence=0.78,
+                    proof_status="needs_review",
+                    tradeable_relation=False,
+                    reasoning="same subject/predicate with opposite polarity",
+                    evidence={"logic_rule": "inverse_polarity"},
+                    requires_semantic_review=True,
+                )
+            return RelationRuleResult(
+                relation_type=RelationType.SAME_EVENT_FAMILY,
+                confidence=0.5,
+                proof_status="verified",
+                tradeable_relation=False,
+                reasoning="inverse proposal lacks opposite-polarity structural proof",
+                evidence={"logic_rule": "downgrade_inverse"},
+            )
+
+        if proposed_relation in (RelationType.SUBSET, RelationType.SUPERSET):
+            if same_subject and same_predicate and same_object:
+                return RelationRuleResult(
+                    relation_type=proposed_relation,
+                    confidence=0.65,
+                    proof_status="needs_review",
+                    tradeable_relation=False,
+                    reasoning="same subject/predicate/object with structural nesting signal",
+                    evidence={"logic_rule": "subset_superset_candidate"},
+                    requires_semantic_review=True,
+                )
+            return RelationRuleResult(
+                relation_type=RelationType.SAME_EVENT_FAMILY,
+                confidence=0.5,
+                proof_status="verified",
+                tradeable_relation=False,
+                reasoning="subset/superset proposal lacks matching subject/predicate/object",
+                evidence={"logic_rule": "downgrade_subset"},
+            )
+
+        if proposed_relation in (
+            RelationType.SAME_EVENT_DIFFERENT_DEADLINE,
+            RelationType.SAME_EVENT_DIFFERENT_SOURCE,
+            RelationType.SAME_EVENT_DIFFERENT_ORACLE,
+        ):
+            if same_subject and same_predicate:
+                return RelationRuleResult(
+                    relation_type=proposed_relation,
+                    confidence=0.65,
+                    proof_status="verified",
+                    tradeable_relation=False,
+                    reasoning="same event with structural asymmetry — not pure arbitrage",
+                    evidence={"logic_rule": "same_event_asymmetric"},
+                )
+            return RelationRuleResult(
+                relation_type=RelationType.SAME_EVENT_FAMILY,
+                confidence=0.5,
+                proof_status="verified",
+                tradeable_relation=False,
+                reasoning="asymmetric event proposal without matching subject/predicate",
+                evidence={"logic_rule": "downgrade_asymmetric"},
+            )
+
+        if same_scope and same_subject and same_predicate and same_object:
+            return RelationRuleResult(
+                relation_type=RelationType.SAME_EVENT_FAMILY,
+                confidence=0.9,
+                proof_status="verified",
+                tradeable_relation=False,
+                reasoning="same proposition family without stronger proof",
+                evidence={"logic_rule": "same_event_family"},
+            )
+
+        if same_scope and same_subject and same_predicate:
+            return RelationRuleResult(
+                relation_type=RelationType.SAME_EVENT_INDEPENDENT,
+                confidence=0.82,
+                proof_status="verified",
+                tradeable_relation=False,
+                reasoning="same event family without an exclusivity or equivalence proof",
+                evidence={"logic_rule": "same_event_independent"},
+            )
+
+        if same_subject and same_predicate:
+            return RelationRuleResult(
+                relation_type=RelationType.RELATED_BUT_NOT_TRADEABLE,
+                confidence=0.55,
+                proof_status="needs_review",
+                tradeable_relation=False,
+                reasoning="shared semantic core without enough scope alignment for a stronger relation",
+                evidence={"logic_rule": "related_but_not_tradeable"},
+                requires_semantic_review=True,
+            )
+
         return RelationRuleResult(
-            relation_type=RelationType.SAME_EVENT_FAMILY,
-            confidence=0.9 if same_scope else 0.5,
-            proof_status="verified",
+            relation_type=RelationType.RELATED_BUT_NOT_TRADEABLE,
+            confidence=0.35,
+            proof_status="rejected",
             tradeable_relation=False,
-            reasoning="same event frame without stronger proof",
-            evidence={"logic_rule": "same_event_family"},
+            reasoning="no stronger relation than loose semantic overlap",
+            evidence={"logic_rule": "loose_overlap"},
         )
 
     def classify_partition_set(
@@ -140,8 +251,8 @@ class RelationRuleEngine:
             return RelationRuleResult(
                 relation_type=RelationType.EXHAUSTIVE_PARTITION,
                 confidence=0.78,
-                proof_status="needs_review",
-                tradeable_relation=False,
+                proof_status="verified",
+                tradeable_relation=True,
                 reasoning="n-ary partition candidate with aligned scope and disjoint outcomes",
                 evidence={
                     "logic_rule": "partition_set_candidate",

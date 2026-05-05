@@ -1,203 +1,119 @@
-# Operational Runbook
+# RUNBOOK
 
-This file defines what counts as proof for Parallax in its current form.
+This is the current runbook for proving PARALLAX Omega honestly.
 
-## Truthfulness Boundary
+## 1. Clean DB / Migrations
 
-- A passing unit suite is necessary, but not sufficient
-- A passing DB-backed lifecycle integration is necessary for lifecycle proof
-- A recent real-data run is necessary for runtime proof
-- A real-data run is not complete unless the evidence is visible through the repo’s own API and UI surfaces
+Required proof:
 
-## P0.1: DB-Backed Lifecycle Proof
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run alembic upgrade head
+```
 
-### Preconditions
+Observed on `2026-05-04`:
 
-- Docker is available
-- the test database target is reachable
-- `TEST_DATABASE_URL` matches the Docker-exposed test port
+- the command passed outside sandbox against the configured local DB
+- clean test DB validation also passed with:
 
-### Standard path
+```bash
+upgrade head
+downgrade 0013
+upgrade head
+```
 
-If `5433` is free:
+Important:
+
+- `alembic/env.py` must respect an explicitly supplied `sqlalchemy.url`
+- use `127.0.0.1:55432/55433` when the repo `.env` is configured that way
+
+## 2. Backend Validation
+
+Verified in this turn:
+
+```bash
+uv run pytest tests/unit
+uv run pytest tests/integration
+```
+
+Observed results:
+
+- `tests/unit`: `351 passed`
+- `tests/integration`: `13 passed` outside sandbox against the local Postgres test DB
+
+## 3. Frontend Validation
+
+Verified in this turn:
+
+```bash
+cd ui
+npm run typecheck
+npm run build
+```
+
+Observed results:
+
+- typecheck passed
+- production build passed
+
+Smoke:
+
+```bash
+UV_CACHE_DIR=/tmp/uv-cache uv run pytest tests/smoke
+```
+
+- `2 skipped`
+- reason: opt-in smoke env not available in this turn
+
+## 4. Real-Data Proof Path
+
+Once DB and credentials are available:
 
 ```bash
 docker compose up -d
-TEST_DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:5433/parallax_test \
-  uv run pytest tests/integration/test_pipeline_integration.py -m integration
-```
-
-If another worktree already occupies `5433`, move both the port and URL together:
-
-```bash
-POSTGRES_TEST_PORT=55433 docker compose up -d
-TEST_DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55433/parallax_test \
-  uv run pytest tests/integration/test_pipeline_integration.py -m integration
-```
-
-If `5432` is also occupied on the same machine, move the runtime port too so local API verification can use the same stack cleanly:
-
-```bash
-POSTGRES_PORT=55432 POSTGRES_TEST_PORT=55433 docker compose up -d
-DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55432/parallax \
-TEST_DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55433/parallax_test \
-  uv run pytest tests/integration/test_pipeline_integration.py -m integration
-```
-
-### What P0.1 Must Prove
-
-- market persistence
-- relation persistence
-- candidate creation
-- court evaluation
-- paper-position opening
-- settlement
-- autopsy persistence
-- audit write on settlement
-
-### What P0.1 Does Not Prove
-
-- live Polymarket data
-- live Kalshi data
-- Anthropic compile on current markets
-- semantic analysis on current live pairs
-
-## P0.1b: CLOB Adapter Smoke Test
-
-Run to verify live Polymarket CLOB connectivity (no credentials required):
-
-```bash
-SMOKE_CLOB=1 uv run pytest tests/smoke/ -v
-```
-
-With Kalshi API key (optional):
-
-```bash
-SMOKE_CLOB=1 KALSHI_API_KEY=<key> SMOKE_KALSHI_TICKER=<ticker> \
-  uv run pytest tests/smoke/ -v
-```
-
-This confirms the Polymarket CLOB adapter returns a valid snapshot from a live market.
-Kalshi returns `None` gracefully without credentials — acceptable for this test.
-
-## P0.2: Recent Real-Data Runtime Proof
-
-### Required Environment
-
-At minimum:
-
-```bash
-DATABASE_URL=postgresql://parallax:dev_password@localhost:5432/parallax
-ANTHROPIC_API_KEY=...
-PIPELINE_MAX_OPEN_MARKETS=8
-```
-
-### Commands
-
-```bash
-docker compose up -d
-uv run alembic upgrade head
+UV_CACHE_DIR=/tmp/uv-cache uv run alembic upgrade head
 uv run python -m parallax.pipeline.runner
 uv run uvicorn parallax.api.app:app --port 8000
 ```
 
-Port-conflict-safe variant:
+Then verify:
 
 ```bash
-POSTGRES_PORT=55432 POSTGRES_TEST_PORT=55433 docker compose up -d
-DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55432/parallax uv run alembic upgrade head
-DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55432/parallax uv run python -m parallax.pipeline.runner
-DATABASE_URL=postgresql://parallax:dev_password@127.0.0.1:55432/parallax uv run uvicorn parallax.api.app:app --port 8000
-```
-
-### Verification Commands
-
-```bash
-curl http://127.0.0.1:8000/health
 curl http://127.0.0.1:8000/ready
-curl http://127.0.0.1:8000/api/ops/metrics
 curl http://127.0.0.1:8000/api/ops/runs
-curl http://127.0.0.1:8000/api/ops/execution
+curl http://127.0.0.1:8000/api/ops/certificates
+curl http://127.0.0.1:8000/api/ops/calibration
+curl http://127.0.0.1:8000/api/ops/proof
 curl http://127.0.0.1:8000/api/candidates
-curl http://127.0.0.1:8000/api/positions
-curl http://127.0.0.1:8000/api/audit
 ```
 
-**Proof bundle capture (single command):**
+To save a proof bundle:
 
 ```bash
 mkdir -p docs/proofs
-curl -s http://127.0.0.1:8000/api/ops/proof \
-  | python3 -m json.tool \
-  > docs/proofs/proof-$(date +%Y%m%d-%H%M%S).json
-cat docs/proofs/proof-*.json | python3 -c \
-  "import sys,json; d=json.load(sys.stdin); print(d['bundle_status'], [i['name'] for i in d['proof_checklist'] if not i['passed']])"
+curl http://127.0.0.1:8000/api/ops/proof > docs/proofs/proof-$(date -u +%Y%m%dT%H%M%SZ).json
 ```
 
-`bundle_status == "complete"` with an empty failed list is the strongest proof claim.
+## 5. What Must Be True Before Saying "No Proof, No Bet" Is Proven
 
-### Evidence Required Before Claiming Runtime Proof
+- at least one candidate has:
+  - scenario matrix
+  - proof object
+  - decision snapshot
+  - issued certificate
+- a paper position opens only with the issued certificate
+- the certificate is inspectable through API/UI
 
-From `/api/ops/runs` or `/api/ops/runs/{run_id}`:
+## 6. What Must Be True Before Saying Calibration Is Closed-Loop
 
-- at least one persisted run proof entry with `run_id`
-- `run_status`, `started_at`, `completed_at`
-- config fingerprint present
-- provider fingerprints present
-- non-zero `market_counts_by_platform.polymarket`
-- non-zero `market_counts_by_platform.kalshi`
-- readiness snapshot captured at run completion
-- runtime control snapshot captured at run completion
+- at least one `calibration_run` persisted
+- `status != insufficient_data` on that run
+- an `active_policy_version` was activated from it
+- court/simulator behavior is demonstrably reading that active policy
+- solver policy construction is demonstrably reading active `solver_penalties`
 
-From `/api/ops/metrics`:
+## 7. What Not To Claim
 
-- non-zero `market_counts_by_platform.polymarket`
-- non-zero `market_counts_by_platform.kalshi`
-- populated activity metrics for compiler, identity, relation_analysis, and divergence
-- if any paper positions have already been settled, `evaluation` shows non-empty realized metrics rather than the zero-settlement placeholder
-
-From `/ready`:
-
-- database status is `ok`
-- semantic analysis status is `ok` for a true semantic-runtime proof
-- Polymarket provider is not stale
-- Kalshi provider is not stale or misconfigured
-
-From candidates and positions:
-
-- at least one candidate, or a zero-candidate outcome backed by audit evidence
-- candidate detail should expose a persisted decision snapshot when court evaluation has run
-- `GET /api/candidates/{candidate_id}/decision` should return the persisted snapshot directly
-- if any position was opened, that position can be settled through `POST /api/positions/{id}/settle`
-- resulting autopsy appears in `GET /api/candidates/{id}/autopsy`
-
-From `/api/ops/execution` (when `orderbook_enabled=True`):
-
-- non-zero `venue_token_count` for the platforms that ran
-- `execution_model_distribution` shows `snapshot_based` entries, not only `heuristic`
-
-From `/api/ops/proof`:
-
-- `bundle_status == "complete"` means all seven checklist items passed
-- `bundle_status == "partial"` — inspect `proof_checklist` for which items failed
-- save the JSON artifact to `docs/proofs/proof-<timestamp>.json` as the durable proof record
-
-From automated settlement (after positions close):
-
-- `GET /api/positions` shows positions with `status: "CLOSED"` and non-null `actual_pnl`
-- `GET /api/candidates/{id}/autopsy` shows the corresponding autopsy record
-- `run_proof.positions_settled > 0` in at least one run entry in `/api/ops/runs`
-
-From the UI:
-
-- operations view reflects the same run counts
-- candidate detail shows relation evidence and live court assessment
-- positions view can settle an open position and display the returned autopsy
-
-## Current Workspace Note
-
-As checked on `2026-05-02`:
-
-- `.env.example` is sufficient for local bootstrap, but not for real-data proof until real credentials are inserted
-- backend unit tests, frontend typecheck, and frontend build were re-verified in this checkout
-- real-data proof is blocked unless working external credentials are present in `.env`
+- Do not claim real-data proof from unit tests.
+- Do not claim clean migration proof from skipped or unreachable DB steps.
+- Do not claim live execution support.
+- Do not call a candidate arbitrage if the proof object marks `false_arbitrage`.

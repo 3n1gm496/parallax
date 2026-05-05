@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sqlalchemy import exists, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from parallax.db.models import MarketEventLink
 from parallax.db.models import RawMarket
@@ -49,6 +49,16 @@ class MarketRepository:
 
     def get(self, market_id: str) -> RawMarket | None:
         return self._session.get(RawMarket, market_id)
+
+    def get_batch(self, market_ids: list[str]) -> list[RawMarket]:
+        """Fetch multiple markets in a single query."""
+        if not market_ids:
+            return []
+        return (
+            self._session.query(RawMarket)
+            .filter(RawMarket.id.in_(market_ids))
+            .all()
+        )
 
     def list_open(
         self, platform: str | None = None, limit: int = 1000, offset: int = 0

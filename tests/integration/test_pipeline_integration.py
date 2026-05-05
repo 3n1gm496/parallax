@@ -13,7 +13,9 @@ from parallax.db.models import CompiledContract, CompiledProposition, RawMarket
 from parallax.court.service import CourtService
 from parallax.candidates.repository import CandidateRepository
 from parallax.divergence.service import DivergenceService
+from parallax.certificates.service import CertificateService
 from parallax.graph.postgres_repository import PostgresGraphRepository
+from parallax.identity.service import IdentityService
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.prover.service import ProverService
 from parallax.shared.schemas import CourtDecision, RawMarketData, RelationType, SettlementRequest
@@ -133,7 +135,9 @@ class TestProverServiceIntegration:
         test_session.commit()
 
         assert count == 1
-        assert graph_repo.relation_exists(a.id, b.id, RelationType.SAME_EVENT_FAMILY)
+        assert graph_repo.relation_exists(a.id, b.id, RelationType.SAME_EVENT_INDEPENDENT) or graph_repo.relation_exists(
+            a.id, b.id, RelationType.SAME_EVENT_FAMILY
+        )
 
 
 @pytest.mark.integration
@@ -145,6 +149,8 @@ class TestDivergenceServiceIntegration:
         b_data = _raw_market_data(f"div-b-{suffix}", 0.55, f"div-grp-{suffix}")
         a, _ = repo.upsert(a_data)
         b, _ = repo.upsert(b_data)
+        test_session.commit()
+        IdentityService(test_session).resolve_all_ungrouped()
         test_session.commit()
 
         graph_repo = PostgresGraphRepository(test_session)
@@ -172,6 +178,8 @@ class TestLifecycleIntegration:
         a, _ = repo.upsert(a_data)
         b, _ = repo.upsert(b_data)
         test_session.commit()
+        IdentityService(test_session).resolve_all_ungrouped()
+        test_session.commit()
 
         graph_repo = PostgresGraphRepository(test_session)
         graph_repo.add_relation(a.id, b.id, RelationType.MUTUALLY_EXCLUSIVE, 0.95, {}, "test")
@@ -196,6 +204,8 @@ class TestLifecycleIntegration:
         assert snapshot.court_assessment is not None
         assert snapshot.simulation_result is not None
         assert snapshot.snapshot_version == "decision-snapshot-v1"
+        CertificateService(test_session).issue(str(candidate.id))
+        test_session.commit()
 
         tracker = TrackerService(test_session)
         position = tracker.open_position(str(candidate.id))

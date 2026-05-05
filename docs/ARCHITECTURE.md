@@ -1,99 +1,59 @@
-# Architecture
+# Parallax System Architecture
 
-This file is the concise architecture map for the active Parallax implementation.
+Parallax is engineered as a **Hybrid Arbitrage Engine** that balances the non-deterministic nature of semantic reasoning with the hard requirements of HFT execution.
 
-## Core Flow
+## 1. Vision: The "Omega" Reality Engine
 
-```text
-native venue adapters
-  -> raw_markets
-  -> compiler
-       -> compiled_contracts
-       -> compiled_propositions
-  -> identity
-       -> canonical_events
-       -> market_event_links
-       -> identity_match_reviews
-  -> event_frames
-       -> canonical_event_frames
-  -> prover
-       -> relation proposals
-       -> logic proof
-       -> semantic veto
-       -> counterexample search
-       -> logical_relations
-       -> logical_relation_sets
-       -> relation_reviews
-       -> counterexample_records
-  -> divergence
-       -> opportunity_candidates
-  -> court
-       -> candidate_decision_snapshots
-  -> tracker
-       -> paper_positions
-  -> autopsy
-       -> autopsy_records
-  -> evaluation / policy
-       -> ops backtest
-       -> ops policy
-```
+PARALLAX is not merely an "opportunity feed"; it is a governed chain of truth designed to ensure that every trade is backed by a verifiable proof:
 
-## Authority Order
+`event reality -> identity authority -> relation proof -> payoff proof -> execution realism -> trade court -> certificate -> paper position -> autopsy -> calibration`
 
-1. Identity
-2. Logical / semantic proof
-3. Tradeability
-4. Execution realism
-5. Settlement / autopsy feedback
+### Non-Negotiable Principles
+- **No proof, no bet**: Every candidate must have a valid `TradeProofCertificate`.
+- **No execution realism, no edge**: Simulated PnL must survive conservative friction models.
+- **Identity before proof**: Semantic mapping is only tradeable if identity status is `verified`.
+- **Autopsy before learning**: Every position (even paper ones) must be closed with an autopsy for calibration.
 
-If two layers disagree, the upstream layer wins. In particular:
+## 2. The "Hot/Cold Path" Split
 
-- semantic proof does not override ambiguous identity
-- tradeability does not override rejected proof
-- displayed edge does not override execution drag
+The system is split into two asynchronous loops to maintain ultra-low latency while performing complex reasoning.
 
-## Storage Boundaries
+### The Cold Path (Discovery & Reasoning)
+- **Ingestion**: Polls and streams raw market data from Polymarket and Kalshi.
+- **Normalization**: Uses LLMs (Anthropic Claude) to transform natural language into structured schemas.
+- **Identity v3**: Maps disparate markets into unified `IdentityClusters` with strict authority.
+- **Graph Reasoning**: Persists relationships (Equivalent, Inverse, Subset) into Neo4j.
 
-- `logical_relations`: authoritative pairwise proof record
-- `logical_relation_sets`: authoritative n-ary proof record
-- `market_relations`: legacy compatibility write model only, disabled by default for new writes
+### The Hot Path (Fast Execution)
+- **L2 Orderbook**: A deterministic Rust engine (`parallax_core`) that maintains market depth.
+- **Micro-Solver**: Scans for executable edges in sub-microsecond time.
+- **HotCache**: A tiered memory system (L1 Dict / L2 Shared Memory) providing pre-compiled arbitrage sets.
 
-## Identity Contract
+## 3. Safety: The Proof Pipeline
 
-Identity is not inferred ad hoc by downstream consumers.
+We enforce a strict data provenance chain before any capital is at risk:
 
-Authoritative persisted identity state lives in:
+1.  **Identity v3**: Confirms two markets refer to the same event reality.
+2.  **Logical Relation**: Defines the mathematical arbitrage thesis.
+3.  **Trade Proof**: A JSON bundle containing embeddings, reasoning, and correlation evidence.
+4.  **Certificate**: A signed database record authorizing the execution manager.
 
-- `market_event_links`
-- `identity_match_reviews`
+## 4. Risk Management & Stateful Hedging
 
-Downstream consumers use the explicit status:
+- **Unwind Engine**: Automatically detects and manages partial fills to ensure delta-neutrality.
+- **Hedge Intents**: Every emergency exit is recorded for stateful recovery across system restarts.
+- **Complexity Breaker**: The MILP solver is capped at 5,000 states to prevent O(2^N) hangs.
 
-- `verified`
-- `ambiguous`
-- `unresolved`
-- `rejected`
+## 5. Technical Stack
 
-Strict semantic opportunities must not become tradeable unless identity is `verified`.
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy 2.0.
+- **Core**: Rust (PyO3).
+- **Data**: PostgreSQL (Audit), Neo4j (Graph), Aerospike (L3 Cache).
+- **Frontend**: Vite, React (War Room Dashboard).
 
-## Operator Surfaces
+## 6. Implementation Status (Phase Map)
 
-- `/ready`: runtime readiness
-- `/api/ops/runs`: persisted run proofs
-- `/api/ops/metrics`: aggregate operations view
-- `/api/ops/evaluation`: settled evaluation summary
-- `/api/ops/backtest`: row-level replay ledger
-- `/api/ops/policy`: threshold and calibration recommendations
-- `/api/ops/identity-review`: ambiguity queue
-- `/api/ops/relation-sets`: n-ary proof inspection
+Parallax is currently in **Phase 5 (War Room Omega)**. While the architecture is materially hardened, full "Omega" acceptance requires real-data proof validation across all venues.
 
-## UI Surfaces
-
-- feed
-- triage
-- operations
-- relation sets
-- positions
-- audit
-
-The operations view is the operator workflow surface. The relation-sets view is the deep proof-inspection surface.
+---
+*Significant architectural decisions are documented in `docs/decisions/`.*

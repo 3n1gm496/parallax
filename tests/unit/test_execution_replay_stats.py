@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
 
-from parallax.execution.replay_stats import ReplayStatisticsService, ReplayStats
+from parallax.execution.replay_stats import ReplayStatisticsService
 
 
 def _make_session(rows: list[tuple]) -> MagicMock:

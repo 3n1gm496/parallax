@@ -129,16 +129,16 @@ def _parse_cents_side(entries: list) -> OrderbookSide:
 
 
 def _mid_price(bids: OrderbookSide, asks: OrderbookSide) -> float | None:
-    best_bid = max((l.price for l in bids.levels), default=None)
-    best_ask = min((l.price for l in asks.levels), default=None)
+    best_bid = max((lv.price for lv in bids.levels), default=None)
+    best_ask = min((lv.price for lv in asks.levels), default=None)
     if best_bid is None or best_ask is None:
         return None
     return (best_bid + best_ask) / 2
 
 
 def _spread_bps(bids: OrderbookSide, asks: OrderbookSide) -> float | None:
-    best_bid = max((l.price for l in bids.levels), default=None)
-    best_ask = min((l.price for l in asks.levels), default=None)
+    best_bid = max((lv.price for lv in bids.levels), default=None)
+    best_ask = min((lv.price for lv in asks.levels), default=None)
     if best_bid is None or best_ask is None or best_bid <= 0:
         return None
     return ((best_ask - best_bid) / best_bid) * 10000

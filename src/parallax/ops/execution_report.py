@@ -10,6 +10,22 @@ from parallax.ops.schemas import ExecutionCoverageStats, ExecutionReport
 
 class ExecutionReportService:
     @staticmethod
+    def _execution_path_for_payload(payload: dict) -> str:
+        path = payload.get("execution_path")
+        if isinstance(path, str) and path:
+            return path
+        legacy_model = str(payload.get("execution_model") or "calibrated_model")
+        if legacy_model == "heuristic":
+            return "calibrated_model"
+        if legacy_model == "snapshot_based":
+            return "offline_validation"
+        if legacy_model == "replay_based":
+            return "offline_validation"
+        if legacy_model == "degraded":
+            return "degraded_fallback"
+        return legacy_model
+
+    @staticmethod
     def build(session: Session) -> ExecutionReport:
         vt_rows = session.execute(
             select(VenueToken.platform, func.count(VenueToken.id)).group_by(VenueToken.platform)
@@ -46,6 +62,7 @@ class ExecutionReportService:
         ).scalars().all()
 
         model_counts: dict[str, int] = {}
+        path_counts: dict[str, int] = {}
         staleness_values: list[float] = []
         depth_true = 0
         depth_total = 0
@@ -55,6 +72,8 @@ class ExecutionReportService:
                 continue
             em = sim.get("execution_model", "heuristic")
             model_counts[em] = model_counts.get(em, 0) + 1
+            ep = ExecutionReportService._execution_path_for_payload(sim)
+            path_counts[ep] = path_counts.get(ep, 0) + 1
             qs = sim.get("quote_staleness_seconds")
             if qs is not None:
                 staleness_values.append(float(qs))
@@ -70,6 +89,7 @@ class ExecutionReportService:
             total_venue_tokens=sum(vt_by_platform.values()),
             total_snapshots=sum(c for c, _ in snap_by_platform.values()),
             execution_model_distribution=model_counts,
+            execution_path_distribution=path_counts,
             avg_quote_staleness_seconds=sum(staleness_values) / len(staleness_values) if staleness_values else None,
             depth_support_rate=depth_true / depth_total if depth_total > 0 else None,
         )

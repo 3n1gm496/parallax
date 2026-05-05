@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { api } from "../api/client";
-import type { CandidateSummary } from "../types";
+import type { CandidateSummary, TradeProofCertificate } from "../types";
 
 interface Props {
   onSelect: (id: string) => void;
@@ -22,13 +22,18 @@ function decisionTone(decision: string): string {
 
 export function ProofFeed({ onSelect }: Props) {
   const [candidates, setCandidates] = useState<CandidateSummary[]>([]);
+  const [certificates, setCertificates] = useState<Record<string, TradeProofCertificate>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.candidates
-      .list()
-      .then(setCandidates)
+    Promise.all([api.candidates.list(), api.ops.certificates().catch(() => ({ items: [] }))])
+      .then(([candidateRows, certificateRows]) => {
+        setCandidates(candidateRows);
+        setCertificates(
+          Object.fromEntries(certificateRows.items.map((item) => [item.candidate_id, item])),
+        );
+      })
       .catch((e: unknown) => setError(String(e)))
       .finally(() => setLoading(false));
   }, []);
@@ -39,6 +44,7 @@ export function ProofFeed({ onSelect }: Props) {
 
   const approved = candidates.filter((candidate) => candidate.court_decision === "APPROVED").length;
   const watchlist = candidates.filter((candidate) => candidate.court_decision === "WATCHLIST").length;
+  const issued = Object.values(certificates).filter((row) => row.certificate_status === "issued").length;
 
   return (
     <section style={panelStyle}>
@@ -62,11 +68,15 @@ export function ProofFeed({ onSelect }: Props) {
           <Metric label="Open" value={String(candidates.length)} />
           <Metric label="Approved" value={String(approved)} />
           <Metric label="Watchlist" value={String(watchlist)} />
+          <Metric label="Issued" value={String(issued)} />
         </div>
       </div>
 
       <div style={{ display: "grid", gap: 10 }}>
-        {candidates.map((candidate) => (
+        {candidates.map((candidate) => {
+          const certificate = certificates[candidate.id] ?? null;
+          const certificateStatus = certificate?.certificate_status ?? "no_proof";
+          return (
           <button
             key={candidate.id}
             onClick={() => onSelect(candidate.id)}
@@ -101,10 +111,11 @@ export function ProofFeed({ onSelect }: Props) {
                 value={candidate.court_decision}
                 tone={decisionTone(candidate.court_decision)}
               />
-              <Metric label="Status" value={candidate.court_decision === "PAPER_TRADE" ? "Tracked" : "Review"} />
+              <Metric label="Proof" value={certificateStatus} />
             </div>
           </button>
-        ))}
+          );
+        })}
       </div>
     </section>
   );

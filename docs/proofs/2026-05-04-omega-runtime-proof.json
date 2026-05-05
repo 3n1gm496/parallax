@@ -1,0 +1,165 @@
+{
+  "captured_on": "2026-05-04",
+  "latest_run": {
+    "candidates_found": 0,
+    "candidates_watchlisted": 0,
+    "completed_at": "2026-05-04T13:03:55.725827Z",
+    "config_fingerprint": "76974280695d",
+    "contracts_compiled": 60,
+    "control_state": {
+      "control_version": "runtime-controls-v1",
+      "degraded_read_only_mode": false,
+      "global_pause": false,
+      "live_execution_enabled": false,
+      "max_candidate_concurrency": 10,
+      "max_daily_loss": 250.0,
+      "max_exposure": 1000.0,
+      "operator_approval_required": true,
+      "semantic_analysis_disabled": false,
+      "venue_pauses": {
+        "kalshi": false,
+        "polymarket": false
+      }
+    },
+    "events_resolved": 23,
+    "fatal_errors": [],
+    "market_counts_by_platform": {
+      "kalshi": 50,
+      "polymarket": 10
+    },
+    "markets_ingested": 60,
+    "non_fatal_errors": [],
+    "positions_opened": 0,
+    "positions_settled": 0,
+    "proof_version": "run-proof-v1",
+    "provider_fingerprints": {
+      "kalshi": "18a0a8cc7e41",
+      "polymarket": "ccfef7bf6243"
+    },
+    "readiness_checks": {
+      "providers": {
+        "kalshi": {
+          "age_minutes": 24.66,
+          "configured": true,
+          "enabled": true,
+          "freshness_threshold_minutes": 180,
+          "latest_market_at": "2026-05-04T12:39:16.279226Z",
+          "market_count": 50,
+          "provider": "native",
+          "reason": null,
+          "status": "ok"
+        },
+        "polymarket": {
+          "age_minutes": 24.78,
+          "configured": true,
+          "enabled": true,
+          "freshness_threshold_minutes": 180,
+          "latest_market_at": "2026-05-04T12:39:08.905459Z",
+          "market_count": 10,
+          "provider": "native",
+          "reason": null,
+          "status": "ok"
+        }
+      },
+      "semantic_analysis": {
+        "configured": true,
+        "min_relation_confidence": 0.7,
+        "provider": "anthropic",
+        "reason": null,
+        "status": "ok"
+      }
+    },
+    "relations_detected": 120,
+    "run_id": "c6047cb6-0cc5-469b-a0c2-69c135db4957",
+    "run_status": "completed",
+    "started_at": "2026-05-04T12:39:08.529881Z"
+  },
+  "proof_bundle": {
+    "bundle_status": "partial",
+    "bundle_version": "proof-bundle-v1",
+    "calibration_status": "missing",
+    "candidates_with_solver_proof": 0,
+    "captured_at": "2026-05-04T14:39:26.515931Z",
+    "certificate_gated_positions": 0,
+    "certificates_issued": 0,
+    "contracts_compiled_last_run": 60,
+    "execution_evidence_status": "partial",
+    "market_counts_by_platform": {
+      "kalshi": 50,
+      "polymarket": 10
+    },
+    "open_positions": 1,
+    "proof_checklist": [
+      {
+        "evidence": "database=ok",
+        "name": "database_ok",
+        "passed": true
+      },
+      {
+        "evidence": "alembic_head=0014",
+        "name": "migrations_ok",
+        "passed": true
+      },
+      {
+        "evidence": "10 polymarket markets",
+        "name": "polymarket_ingested",
+        "passed": true
+      },
+      {
+        "evidence": "50 kalshi markets",
+        "name": "kalshi_ingested",
+        "passed": true
+      },
+      {
+        "evidence": "60 contracts compiled in last run",
+        "name": "compilation_ran",
+        "passed": true
+      },
+      {
+        "evidence": "120 relations in last run",
+        "name": "relations_detected",
+        "passed": true
+      },
+      {
+        "evidence": "0 candidates with persisted solver proof",
+        "name": "candidates_with_solver_proof",
+        "passed": false
+      },
+      {
+        "evidence": "0 issued certificates",
+        "name": "certificates_issued",
+        "passed": false
+      },
+      {
+        "evidence": "0 positions linked to certificates",
+        "name": "certificate_gated_positions",
+        "passed": false
+      },
+      {
+        "evidence": "missing",
+        "name": "calibration_status",
+        "passed": false
+      },
+      {
+        "evidence": "partial",
+        "name": "execution_evidence_status",
+        "passed": false
+      },
+      {
+        "evidence": "run persisted",
+        "name": "run_proof_exists",
+        "passed": true
+      },
+      {
+        "evidence": "semantic: ok",
+        "name": "semantic_ok",
+        "passed": true
+      }
+    ],
+    "readiness_status": "ready",
+    "relations_detected_last_run": 120,
+    "run_proof_exists": true,
+    "total_candidates": 1,
+    "total_markets": 60
+  }
+}

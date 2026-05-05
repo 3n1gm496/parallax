@@ -9,10 +9,17 @@ from fastapi import HTTPException
 
 from parallax.api.deps import require_read_access, require_write_access
 from parallax.api.routes.audit import list_audit_events
-from parallax.api.routes.candidates import get_candidate, get_candidate_decision_snapshot, list_candidates
+from parallax.api.routes.candidates import (
+    get_candidate,
+    get_candidate_decision_ledger,
+    get_candidate_decision_snapshot,
+    list_candidates,
+)
 from parallax.api.routes.markets import get_market, list_markets
 from parallax.api.routes.ops import (
     get_backtest_replay,
+    get_candidate_funnel,
+    get_candidate_funnel_for_run,
     get_evaluation_report,
     get_execution_report,
     get_identity_review_queue,
@@ -21,6 +28,8 @@ from parallax.api.routes.ops import (
     get_proof_bundle,
     get_relation_set,
     get_run_proof,
+    get_sensitivity_report,
+    get_shadow_candidates,
     list_relation_sets,
     list_run_proofs,
 )
@@ -40,6 +49,7 @@ from parallax.shared.schemas import (
     CourtAssessment,
     CourtDecision,
     DecisionSnapshot,
+    DecisionLedgerEntry,
     DecisionGate,
     Leg,
     OpportunityType,
@@ -313,6 +323,35 @@ def test_get_candidate_decision_snapshot_returns_snapshot():
         MockService.return_value.get_detail.return_value = detail
         result = get_candidate_decision_snapshot(candidate_id=str(candidate.id), session=session)
     assert result.run_id == "run-1"
+
+
+def test_get_candidate_decision_ledger_returns_entries():
+    session = MagicMock()
+    candidate = _candidate()
+    entry = DecisionLedgerEntry(
+        candidate_id=str(candidate.id),
+        run_id="run-1",
+        evaluated_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        decision=CourtDecision.APPROVED,
+        source_of_truth="primary_proof_based",
+        fallback_status="none",
+        model_version="decision-ledger-v1",
+        confidence=0.9,
+        score=0.04,
+        input_packet=None,
+        relation_proof=None,
+        execution_evidence=None,
+        blocking_reason=None,
+        counterexamples=[],
+        metadata={},
+    )
+    detail = MagicMock()
+    detail.decision_snapshot = None
+    with patch("parallax.api.routes.candidates.CandidateReadService") as MockService:
+        MockService.return_value.get_detail.return_value = detail
+        MockService.return_value.list_decision_ledger_entries.return_value = [entry]
+        result = get_candidate_decision_ledger(candidate_id=str(candidate.id), session=session)
+    assert result[0].source_of_truth == "primary_proof_based"
 
 
 def test_list_audit_empty():
@@ -857,7 +896,6 @@ def test_candidate_summary_execution_model_defaults_none():
 
 
 def test_get_proof_bundle_returns_payload():
-    from parallax.api.routes.ops import get_proof_bundle
     from parallax.ops.schemas import ProofBundleReport, ProofCheckItem
 
     session = MagicMock()
@@ -889,3 +927,41 @@ def test_get_proof_bundle_returns_payload():
     assert result.bundle_status == "partial"
     assert len(result.proof_checklist) == 7
     assert result.proof_checklist[0].name == "database_ok"
+
+
+def test_get_candidate_funnel_returns_payload():
+    session = MagicMock()
+    payload = MagicMock()
+    with patch("parallax.api.routes.ops.CandidateDiagnosticsService") as mock_service:
+        mock_service.return_value.build_candidate_funnel_report.return_value = payload
+        result = get_candidate_funnel(session=session)
+    assert result is payload
+
+
+def test_get_candidate_funnel_for_run_passes_run_id():
+    session = MagicMock()
+    payload = MagicMock()
+    with patch("parallax.api.routes.ops.CandidateDiagnosticsService") as mock_service:
+        mock_service.return_value.build_candidate_funnel_report.return_value = payload
+        result = get_candidate_funnel_for_run("run-123", session=session)
+    mock_service.return_value.build_candidate_funnel_report.assert_called_once_with("run-123")
+    assert result is payload
+
+
+def test_get_shadow_candidates_returns_payload():
+    session = MagicMock()
+    payload = MagicMock()
+    with patch("parallax.api.routes.ops.CandidateDiagnosticsService") as mock_service:
+        mock_service.return_value.build_shadow_candidates_report.return_value = payload
+        result = get_shadow_candidates(session=session, limit=5)
+    mock_service.return_value.build_shadow_candidates_report.assert_called_once_with(limit=5)
+    assert result is payload
+
+
+def test_get_sensitivity_report_returns_payload():
+    session = MagicMock()
+    payload = MagicMock()
+    with patch("parallax.api.routes.ops.CandidateDiagnosticsService") as mock_service:
+        mock_service.return_value.build_sensitivity_report.return_value = payload
+        result = get_sensitivity_report(session=session)
+    assert result is payload

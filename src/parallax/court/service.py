@@ -1,19 +1,23 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from parallax.calibration.service import CalibrationService
 from parallax.candidates.evidence import load_relation_evidence
 from parallax.candidates.repository import CandidateRepository
 from parallax.config import settings
-from parallax.graph.postgres_repository import PostgresGraphRepository
+from parallax.db.models import PostgresGraphRepository, TradeProofCertificateRecord
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import (
     CourtAssessment,
     CourtDecision,
     DecisionGate,
+    DecisionLedgerEntry,
+    EvidencePacket,
     IdentityResolutionStatus,
     OpportunityType,
     RelationType,
+    RelationProof,
     RiskScore,
     SimulationResult,
 )
@@ -45,14 +49,19 @@ class CourtService:
         self._market_repo = MarketRepository(session)
         self._graph_repo = PostgresGraphRepository(session)
         self._simulator = SimulatorService(session)
+        self._active_policy = CalibrationService(session).active_policy()
 
     def assess(self, candidate_id: str) -> CourtAssessment:
         assessment, _ = self.assess_with_simulation(candidate_id)
         return assessment
 
     def assess_with_simulation(self, candidate_id: str) -> tuple[CourtAssessment, SimulationResult]:
+        from parallax.certificates.service import CertificateService
+        cert_service = CertificateService(self._session)
+        certificate = cert_service.get_for_candidate(candidate_id)
+        
         simulation = self._simulator.simulate(candidate_id)
-        return self._run_assessment(candidate_id, simulation)
+        return self._run_assessment(candidate_id, simulation, certificate=certificate)
 
     def assess_with_snapshots(
         self,
@@ -60,9 +69,13 @@ class CourtService:
         snapshots: dict[str, OrderbookSnapshot | None],
     ) -> tuple[CourtAssessment, SimulationResult, RiskScore | None]:
         """Run assessment using snapshot-based simulation, with extra orderbook gates."""
+        from parallax.certificates.service import CertificateService
+        cert_service = CertificateService(self._session)
+        certificate = cert_service.get_for_candidate(candidate_id)
+
         simulation = self._simulator.simulate_snapshot(candidate_id, snapshots)
         adjusted_risk = self._compute_adjusted_risk(candidate_id, simulation)
-        base_assessment, _ = self._run_assessment(candidate_id, simulation, risk_override=adjusted_risk)
+        base_assessment, _ = self._run_assessment(candidate_id, simulation, risk_override=adjusted_risk, certificate=certificate)
 
         # Inject orderbook-specific gates
         extra_gates, extra_reasons, downgrade = self._orderbook_gates(simulation)
@@ -83,6 +96,14 @@ class CourtService:
             risk_flags=list(simulation.risk_flags),
             gates=gates,
             policy_version="court-v2-snapshot",
+            decision_path=(
+                "degraded_fallback"
+                if simulation.execution_path == "degraded_fallback"
+                else "offline_validation"
+                if simulation.execution_path == "offline_validation"
+                else base_assessment.decision_path
+            ),
+            evidence_packet=base_assessment.evidence_packet,
         )
         return assessment, simulation, adjusted_risk
 
@@ -94,6 +115,33 @@ class CourtService:
             return None
         base = RiskScore.model_validate(candidate.risk_scores)
         return RiskScore.adjust_from_simulation(base, simulation)
+
+    def fast_reject_check(self, candidate_id: str) -> bool:
+        """
+        [Opp 8] Tiered Risk Gates: Fast-Reject
+        Checks basic requirements (e.g. valid risk scores, minimum volume/liquidity hints)
+        before doing heavy snapshot fetching or simulation.
+        Returns True if candidate passes fast reject, False if it should be rejected.
+        """
+        candidate = self._repo.get(candidate_id)
+        if not candidate:
+            return False
+            
+        # Basic fast-reject heuristics
+        if candidate.opportunity_type not in [o.value for o in OpportunityType]:
+            return False
+            
+        # If risk scores are pre-computed, check baseline spread
+        if candidate.risk_scores:
+            try:
+                # Fast dict access bypasses Pydantic (Opp 18)
+                spread = candidate.risk_scores.get("baseline_spread")
+                if spread is not None and spread > settings.court_max_spread_for_approval:
+                    return False
+            except Exception:
+                pass
+                
+        return True
 
     @staticmethod
     def _orderbook_gates(
@@ -183,6 +231,7 @@ class CourtService:
         candidate_id: str,
         simulation: SimulationResult,
         risk_override: RiskScore | None = None,
+        certificate: TradeProofCertificateRecord | None = None,
     ) -> tuple[CourtAssessment, SimulationResult]:
         """Internal: run the assessment logic given a pre-computed simulation."""
         candidate = self._repo.get(candidate_id)
@@ -193,28 +242,44 @@ class CourtService:
             RiskScore.model_validate(candidate.risk_scores) if candidate.risk_scores else None
         )
         opportunity_type = OpportunityType(candidate.opportunity_type)
-        markets = [
-            market
-            for market in (self._market_repo.get(market_id) for market_id in candidate.market_ids)
-            if market is not None
-        ]
-        relation = load_relation_evidence(self._session, candidate.market_ids)
-        if relation is None:
-            relation = self._load_primary_relation(candidate.market_ids)
-        relation_type = self._relation_type(relation)
-        relation_confidence = self._relation_confidence(relation)
-        relation_tradeable = self._relation_tradeable(relation)
-        relation_proof_status = self._relation_proof_status(relation)
-        breaking_scenarios = self._breaking_scenarios(relation)
-        abstention_reason = self._abstention_reason(relation)
-        relation_is_confirmed = self._relation_is_confirmed(relation)
-        relation_signals = get_relation_signals(relation)
-        identity_status = self._identity_status(relation)
-        identity_blocking_reason = self._identity_blocking_reason(relation)
-        oracle_mismatch = self._has_oracle_mismatch(markets, relation_type) or relation_signals["oracle_mismatch"]
-        deadline_mismatch = relation_signals["deadline_mismatch"]
-        ambiguity_level = relation_signals["ambiguity_level"]
-        shared_ambiguity_terms = relation_signals["shared_ambiguity_terms"]
+        markets = self._market_repo.get_batch(candidate.market_ids)
+        
+        # USE CERTIFICATE IF ISSUED
+        if certificate and certificate.certificate_status == "issued":
+            relation_type = RelationType(certificate.identity_status) if certificate.identity_status in [r.value for r in RelationType] else RelationType.EQUIVALENT # Fallback or logic
+            # Mapping status to relation
+            relation_type = RelationType.EQUIVALENT # Default for ISSUED certificate usually implies tradeability
+            relation_confidence = certificate.identity_confidence
+            relation_tradeable = True
+            relation_proof_status = "verified"
+            breaking_scenarios = []
+            abstention_reason = None
+            relation_is_confirmed = True
+            relation_signals = {"oracle_mismatch": False, "deadline_mismatch": False, "ambiguity_level": "low", "shared_ambiguity_terms": []}
+            identity_status = IdentityResolutionStatus(certificate.identity_status)
+            identity_blocking_reason = None
+            oracle_mismatch = False
+            deadline_mismatch = False
+            ambiguity_level = "low"
+            shared_ambiguity_terms = []
+        else:
+            relation = load_relation_evidence(self._session, candidate.market_ids)
+            if relation is None:
+                relation = self._load_primary_relation(candidate.market_ids)
+            relation_type = self._relation_type(relation)
+            relation_confidence = self._relation_confidence(relation)
+            relation_tradeable = self._relation_tradeable(relation)
+            relation_proof_status = self._relation_proof_status(relation)
+            breaking_scenarios = self._breaking_scenarios(relation)
+            abstention_reason = self._abstention_reason(relation)
+            relation_is_confirmed = self._relation_is_confirmed(relation)
+            relation_signals = get_relation_signals(relation)
+            identity_status = self._identity_status(relation)
+            identity_blocking_reason = self._identity_blocking_reason(relation)
+            oracle_mismatch = self._has_oracle_mismatch(markets, relation_type) or relation_signals["oracle_mismatch"]
+            deadline_mismatch = relation_signals["deadline_mismatch"]
+            ambiguity_level = relation_signals["ambiguity_level"]
+            shared_ambiguity_terms = relation_signals["shared_ambiguity_terms"]
 
         reasons: list[str] = []
         gates: list[DecisionGate] = []
@@ -380,8 +445,9 @@ class CourtService:
                     )
                 )
                 decision = CourtDecision.WATCHLIST
-            max_risk = self._max_composite_risk(opportunity_type)
-            min_fill_probability = self._min_fill_probability(opportunity_type)
+            active_policy = getattr(self, "_active_policy", None)
+            max_risk = self._max_composite_risk(opportunity_type, active_policy.court_thresholds if active_policy else None)
+            min_fill_probability = self._min_fill_probability(opportunity_type, active_policy.court_thresholds if active_policy else None)
             min_simulated_pnl = self._min_simulated_pnl(opportunity_type)
             if risk is not None and risk.composite > max_risk:
                 reasons.append("composite risk exceeds approval threshold for this opportunity type")
@@ -498,7 +564,19 @@ class CourtService:
             relation_type=relation_type,
             risk_flags=risk_flags,
             gates=gates,
-            policy_version="court-v2",
+            policy_version=(getattr(self, "_active_policy", None).policy_version if getattr(self, "_active_policy", None) is not None else "court-v2"),
+            decision_path=self._decision_path(relation, simulation, relation_tradeable, relation_proof_status),
+            evidence_packet=self._build_evidence_packet(
+                candidate_id=candidate_id,
+                relation_type=relation_type,
+                relation_tradeable=relation_tradeable,
+                relation_proof_status=relation_proof_status,
+                relation_confidence=relation_confidence,
+                relation_signals=relation_signals,
+                identity_status=identity_status,
+                simulation=simulation,
+                reasons=reasons,
+            ),
         )
         return assessment, simulation
 
@@ -538,6 +616,20 @@ class CourtService:
         if risk is None and candidate is not None and candidate.risk_scores:
             risk = RiskScore.model_validate(candidate.risk_scores)
         relation_evidence = load_relation_evidence(self._session, candidate.market_ids) if candidate is not None else None
+        decision_ledger_entry = self._build_decision_ledger_entry(
+            candidate_id=candidate_id,
+            assessment=assessment,
+            simulation=simulation,
+            relation_evidence=relation_evidence,
+            risk_score=risk,
+            run_id=run_id,
+        )
+        self._repo.append_decision_ledger_entry(
+            candidate_id,
+            run_id=run_id,
+            decision_ledger_entry=decision_ledger_entry,
+        )
+        self._session.flush()
         self._repo.upsert_decision_snapshot(
             candidate_id,
             run_id=run_id,
@@ -545,8 +637,10 @@ class CourtService:
             relation_evidence=relation_evidence,
             simulation_result=simulation,
             court_assessment=assessment,
+            decision_ledger_entry=decision_ledger_entry,
             evaluated_at=datetime.now(timezone.utc),
         )
+        self._session.flush()
         return decision
 
     @staticmethod
@@ -637,7 +731,10 @@ class CourtService:
         if relation is None:
             return IdentityResolutionStatus.UNRESOLVED
         if hasattr(relation, "identity_status"):
-            return IdentityResolutionStatus(str(relation.identity_status))
+            value = relation.identity_status
+            if isinstance(value, IdentityResolutionStatus):
+                return value
+            return IdentityResolutionStatus(str(value))
         return IdentityResolutionStatus(str(relation.get("identity_status", "unresolved")))
 
     @staticmethod
@@ -661,20 +758,22 @@ class CourtService:
         return len(sources) > 1
 
     @staticmethod
-    def _max_composite_risk(opportunity_type: OpportunityType) -> float:
+    def _max_composite_risk(opportunity_type: OpportunityType, thresholds: dict | None = None) -> float:
+        base_threshold = float((thresholds or {}).get("court_max_composite_risk", settings.court_max_composite_risk))
         if opportunity_type in _STRICT_OPPORTUNITY_TYPES:
-            return min(settings.court_max_composite_risk, 0.3)
+            return min(base_threshold, 0.3)
         if opportunity_type == OpportunityType.MUTUALLY_EXCLUSIVE_MISPRICING:
-            return min(0.55, settings.court_max_composite_risk + 0.1)
-        return settings.court_max_composite_risk
+            return min(0.55, base_threshold + 0.1)
+        return base_threshold
 
     @staticmethod
-    def _min_fill_probability(opportunity_type: OpportunityType) -> float:
+    def _min_fill_probability(opportunity_type: OpportunityType, thresholds: dict | None = None) -> float:
+        base_threshold = float((thresholds or {}).get("court_min_fill_probability", settings.court_min_fill_probability))
         if opportunity_type in _STRICT_OPPORTUNITY_TYPES:
-            return max(settings.court_min_fill_probability, 0.7)
+            return max(base_threshold, 0.7)
         if opportunity_type == OpportunityType.MUTUALLY_EXCLUSIVE_MISPRICING:
-            return max(0.45, settings.court_min_fill_probability - 0.05)
-        return settings.court_min_fill_probability
+            return max(0.45, base_threshold - 0.05)
+        return base_threshold
 
     @staticmethod
     def _min_simulated_pnl(opportunity_type: OpportunityType) -> float:
@@ -683,3 +782,123 @@ class CourtService:
         if opportunity_type == OpportunityType.MUTUALLY_EXCLUSIVE_MISPRICING:
             return max(0.005, settings.court_min_simulated_pnl - 0.0025)
         return settings.court_min_simulated_pnl
+
+    @staticmethod
+    def _decision_path(
+        relation,
+        simulation: SimulationResult,
+        relation_tradeable: bool,
+        relation_proof_status: str,
+    ) -> str:
+        if simulation.execution_path in {"offline_validation", "degraded_fallback"}:
+            return simulation.execution_path
+        if relation is not None and relation_tradeable and relation_proof_status == "verified":
+            return "primary_proof_based"
+        return "calibrated_model"
+
+    @staticmethod
+    def _build_evidence_packet(
+        *,
+        candidate_id: str,
+        relation_type: RelationType | None,
+        relation_tradeable: bool,
+        relation_proof_status: str,
+        relation_confidence: float | None,
+        relation_signals: dict[str, object],
+        identity_status: IdentityResolutionStatus,
+        simulation: SimulationResult,
+        reasons: list[str],
+    ) -> EvidencePacket:
+        fallback_status = "none"
+        source_of_truth = "calibrated_model"
+        if simulation.execution_path == "offline_validation":
+            source_of_truth = "offline_validation"
+            fallback_status = "offline_validation"
+        elif simulation.execution_path == "degraded_fallback":
+            source_of_truth = "degraded_fallback"
+            fallback_status = "degraded"
+        elif relation_tradeable and relation_proof_status == "verified":
+            source_of_truth = "primary_proof_based"
+        return EvidencePacket(
+            packet_id=f"court:{candidate_id}",
+            source_of_truth=source_of_truth,
+            fallback_status=fallback_status,
+            model_version="court-evidence-v1",
+            confidence=relation_confidence,
+            blocking_reason="; ".join(reasons) if reasons else None,
+            counterexamples=[],
+            evidence={
+                "candidate_id": candidate_id,
+                "relation_type": relation_type.value if relation_type is not None else None,
+                "relation_tradeable": relation_tradeable,
+                "relation_proof_status": relation_proof_status,
+                "relation_signals": relation_signals,
+                "identity_status": identity_status.value,
+                "execution_path": simulation.execution_path,
+            },
+        )
+
+    @staticmethod
+    def _build_decision_ledger_entry(
+        *,
+        candidate_id: str,
+        assessment: CourtAssessment,
+        simulation: SimulationResult,
+        relation_evidence,
+        risk_score: RiskScore | None,
+        run_id: str | None,
+    ) -> DecisionLedgerEntry:
+        relation_proof = None
+        if relation_evidence is not None:
+            relation_proof = getattr(relation_evidence, "relation_proof", None)
+            if relation_proof is None:
+                relation_proof = RelationProof(
+                    packet_id=f"court:{candidate_id}",
+                    source_of_truth=assessment.decision_path,
+                    fallback_status="none" if assessment.decision_path == "primary_proof_based" else (
+                        "offline_validation" if assessment.decision_path == "offline_validation" else "degraded"
+                    ),
+                    model_version="relation-proof-compat-v1",
+                    confidence=relation_evidence.confidence if hasattr(relation_evidence, "confidence") else None,
+                    blocking_reason=getattr(relation_evidence, "abstention_reason", None),
+                    counterexamples=getattr(relation_evidence, "breaking_scenarios", []) or [],
+                    evidence={"relation_type": getattr(relation_evidence, "relation_type", None)},
+                    relation_type=getattr(relation_evidence, "relation_type", None),
+                    proof_status=getattr(relation_evidence, "proof_status", "needs_review"),
+                    tradeable_relation=bool(getattr(relation_evidence, "tradeable_relation", False)),
+                    relation_signals=getattr(relation_evidence, "relation_signals", {}) or {},
+                    identity_provenance=getattr(relation_evidence, "identity_provenance", None),
+                    identity_status=getattr(relation_evidence, "identity_status", IdentityResolutionStatus.UNRESOLVED),
+                    identity_version=str(getattr(relation_evidence, "identity_version", "identity-v2")),
+                    frame_id=getattr(relation_evidence, "frame_id", None),
+                    set_key=getattr(relation_evidence, "set_key", None),
+                    member_market_ids=list(getattr(relation_evidence, "member_market_ids", []) or []),
+                )
+        confidence = risk_score.composite if risk_score is not None else None
+        score = simulation.simulated_pnl
+        return DecisionLedgerEntry(
+            candidate_id=candidate_id,
+            run_id=run_id,
+            evaluated_at=datetime.now(timezone.utc),
+            decision=assessment.decision,
+            source_of_truth=assessment.decision_path,
+            fallback_status=(
+                "none"
+                if assessment.decision_path == "primary_proof_based"
+                else "offline_validation"
+                if assessment.decision_path == "offline_validation"
+                else "degraded"
+            ),
+            model_version=assessment.policy_version,
+            confidence=confidence,
+            score=score,
+            input_packet=assessment.evidence_packet,
+            relation_proof=relation_proof if isinstance(relation_proof, RelationProof) else None,
+            execution_evidence=simulation.execution_evidence,
+            blocking_reason=assessment.evidence_packet.blocking_reason if assessment.evidence_packet else None,
+            counterexamples=list(relation_proof.counterexamples) if isinstance(relation_proof, RelationProof) else [],
+            metadata={
+                "execution_model": simulation.execution_model,
+                "execution_path": simulation.execution_path,
+            },
+        )

@@ -7,6 +7,7 @@ import pytest
 import parallax.prover.service as prover_service
 
 from parallax.db.models import RawMarket
+from parallax.detection.proposal_generator import RelationProposal
 from parallax.prover.service import RelationAnalysisService
 from parallax.shared.schemas import (
     CompiledPropositionSchema,
@@ -112,12 +113,12 @@ class TestRelationAnalysisService:
         graph_repo.add_relation.assert_not_called()
 
     @pytest.mark.anyio
-    async def test_same_group_is_downgraded_to_same_event_family(self):
+    async def test_same_group_is_downgraded_to_same_event_independent(self):
         service, graph_repo = self._make_service()
         count = await service.run([_market("pm", "a", "g1"), _market("pm", "b", "g1")])
         assert count == 1
         kwargs = graph_repo.add_relation.call_args.kwargs
-        assert kwargs["relation_type"] == RelationType.SAME_EVENT_FAMILY
+        assert kwargs["relation_type"] == RelationType.SAME_EVENT_INDEPENDENT
         assert kwargs["created_by"] == "logic_engine"
         assert kwargs["evidence"]["tradeable_relation"] is False
 
@@ -127,6 +128,42 @@ class TestRelationAnalysisService:
         count = await service.run([_market("pm", "a", "g1"), _market("pm", "b", "g1")])
         assert count == 0
         graph_repo.add_relation.assert_not_called()
+
+    @pytest.mark.anyio
+    async def test_hypothesis_proposal_can_override_frame_fallback(self):
+        service, graph_repo = self._make_service()
+        service._proposal_generator.generate = MagicMock(
+            return_value=[
+                RelationProposal(
+                    from_market_id="pm:a",
+                    to_market_id="pm:b",
+                    proposed_relation_type=RelationType.SAME_EVENT_FAMILY,
+                    confidence=0.95,
+                    frame_id="frame-1",
+                    evidence={"rule": "same_frame_signature"},
+                    hypothesis_source="frame",
+                )
+            ]
+        )
+        service._hypothesis_generator.generate = MagicMock(
+            return_value=[
+                RelationProposal(
+                    from_market_id="pm:a",
+                    to_market_id="pm:b",
+                    proposed_relation_type=RelationType.SAME_EVENT_DIFFERENT_SOURCE,
+                    confidence=0.6,
+                    frame_id="frame-1",
+                    evidence={"hypothesis_source": "hypothesis_generator", "same_frame": True},
+                    semantic_question="Hypothesis: same event, different source?",
+                    hypothesis_source="hypothesis_generator",
+                )
+            ]
+        )
+        count = await service.run([_market("pm", "a", "g1"), _market("pm", "b", "g1")])
+        assert count == 1
+        kwargs = graph_repo.add_relation.call_args.kwargs
+        assert kwargs["relation_type"] == RelationType.SAME_EVENT_DIFFERENT_SOURCE
+        assert kwargs["created_by"] == "logic_engine"
 
 
 class TestRelationAnalysisWithSemanticReview:

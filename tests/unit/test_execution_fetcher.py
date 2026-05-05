@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from parallax.config import Settings
 from parallax.execution.fetcher import OrderbookFetcher
-from parallax.execution.schemas import OrderbookSnapshot, OrderbookSide
+from parallax.execution.schemas import OrderbookSnapshot
 
 
 def _fresh_snap(platform: str = "polymarket") -> OrderbookSnapshot:

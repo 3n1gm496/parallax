@@ -5,7 +5,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from parallax.shared.schemas import LogicalRelationSetSchema, OpportunityType, RelationType
+from parallax.shared.schemas import (
+    ActivePolicyVersionReport,
+    CalibrationRunReport,
+    LogicalRelationSetSchema,
+    OpportunityType,
+    RelationType,
+    TradeProofCertificate,
+)
 
 
 class RunSummary(BaseModel):
@@ -150,6 +157,7 @@ class PolicyReport(BaseModel):
     recent_identity_invalidations: int = 0
     recent_oracle_invalidations: int = 0
     recommendations: list[PolicyRecommendation] = Field(default_factory=list)
+    active_policy: ActivePolicyVersionReport | None = None
     report_version: str = "policy-report-v1"
 
 
@@ -227,12 +235,21 @@ class IdentityClusterEntry(BaseModel):
     primary_market_id: str | None = None
     primary_market_title: str | None = None
     created_at: datetime
+    provenance: dict[str, object] = Field(default_factory=dict)
+    blocking_reasons: list[str] = Field(default_factory=list)
 
 
 class IdentityClusterQueueResponse(BaseModel):
     generated_at: datetime
     clusters: list[IdentityClusterEntry] = Field(default_factory=list)
     total: int = 0
+
+
+class IdentityClusterDetailResponse(BaseModel):
+    cluster: IdentityClusterEntry
+    members: list[dict[str, object]] = Field(default_factory=list)
+    review_actions: list[dict[str, object]] = Field(default_factory=list)
+    split_merge_history: list[dict[str, object]] = Field(default_factory=list)
 
 
 class IdentityMetricsReport(BaseModel):
@@ -245,6 +262,10 @@ class IdentityMetricsReport(BaseModel):
     benchmark_total: int = 0
     benchmark_correct: int = 0
     benchmark_wrong: int = 0
+    false_merge_count: int = 0
+    false_split_count: int = 0
+    unresolved_rate: float = 0.0
+    ambiguous_rate: float = 0.0
 
 
 class SplitClusterRequest(BaseModel):
@@ -332,9 +353,27 @@ class ExecutionReport(BaseModel):
     total_venue_tokens: int
     total_snapshots: int
     execution_model_distribution: dict[str, int]
+    execution_path_distribution: dict[str, int] = Field(default_factory=dict)
     avg_quote_staleness_seconds: float | None = None
     depth_support_rate: float | None = None
     report_basis: str = "last_500_evaluations"
+
+
+class CertificateListResponse(BaseModel):
+    items: list[TradeProofCertificate] = Field(default_factory=list)
+
+
+class ScorecardListResponse(BaseModel):
+    items: list[dict[str, object]] = Field(default_factory=list)
+
+
+class StrategyKillListResponse(BaseModel):
+    items: list[dict[str, object]] = Field(default_factory=list)
+
+
+class CalibrationStatusResponse(BaseModel):
+    latest_run: CalibrationRunReport | None = None
+    active_policy: ActivePolicyVersionReport | None = None
 
 
 class ProofCheckItem(BaseModel):
@@ -353,6 +392,186 @@ class ProofBundleReport(BaseModel):
     contracts_compiled_last_run: int = 0
     relations_detected_last_run: int = 0
     run_proof_exists: bool = False
+    candidates_with_solver_proof: int = 0
+    certificates_issued: int = 0
+    certificate_gated_positions: int = 0
+    decision_ledger_entries: int = 0
+    calibration_status: str = "missing"
+    execution_evidence_status: str = "blocked"
     proof_checklist: list[ProofCheckItem] = Field(default_factory=list)
     bundle_status: str = "partial"
     bundle_version: str = "proof-bundle-v1"
+
+
+class CountWithPct(BaseModel):
+    count: int
+    pct: float | None = None
+
+
+class ReasonCount(BaseModel):
+    reason: str
+    count: int
+
+
+class CandidateFunnelMarketsReport(BaseModel):
+    total: int
+    by_platform: dict[str, int] = Field(default_factory=dict)
+    open: CountWithPct
+    closed: CountWithPct
+    with_outcome_prices: CountWithPct
+    with_token_ids: CountWithPct
+    with_usable_deadlines: CountWithPct
+    with_compiled_contracts: CountWithPct
+
+
+class CandidateFunnelCompilationReport(BaseModel):
+    compiled: CountWithPct
+    below_compiler_confidence: CountWithPct
+    missing_source_deadline_conditions: CountWithPct
+    compiler_abstention_or_error: CountWithPct
+
+
+class CandidateFunnelIdentityReport(BaseModel):
+    identity_links: int
+    verified: CountWithPct
+    ambiguous: CountWithPct
+    unresolved: CountWithPct
+    rejected: CountWithPct
+    false_equivalence: CountWithPct
+    top_blocking_reasons: list[ReasonCount] = Field(default_factory=list)
+    cluster_count: int
+    average_cluster_size: float
+    clusters_with_tradeable_pairs: int
+
+
+class CandidateFunnelRelationReport(BaseModel):
+    relation_proposals: int
+    logical_relations: int
+    logical_relation_sets: int
+    confirmed_semantic: int
+    semantic_veto: int
+    semantic_abstention: int
+    tradeable_true: int
+    tradeable_false: int
+    relation_types: dict[str, int] = Field(default_factory=dict)
+    top_blocking_reasons: list[ReasonCount] = Field(default_factory=list)
+    # Hypothesis generator breakdown (added by Ω upgrade)
+    frame_proposals: int = 0
+    hypothesis_proposals: int = 0
+    hypotheses_by_type: dict[str, int] = Field(default_factory=dict)
+    tradeable_by_hypothesis: int = 0
+    tradeable_by_frame: int = 0
+
+
+class SolverDecisionEntry(BaseModel):
+    relation_key: str
+    relation_kind: str
+    relation_type: str
+    market_ids: list[str] = Field(default_factory=list)
+    identity_status: str
+    solver_called: bool
+    solver_skip_reason: str | None = None
+    solver_none_reason: str | None = None
+    proof_status: str | None = None
+    valid_state_count: int = 0
+    impossible_state_count: int = 0
+    displayed_edge: float | None = None
+    executable_edge: float | None = None
+    worst_case_payoff: float | None = None
+    false_arbitrage_label: str | None = None
+    min_profit_threshold: float
+    rejected_by_threshold: bool
+    rejected_by_identity: bool
+    rejected_by_false_arbitrage: bool
+    rejected_by_dedup: bool
+
+
+class CandidateFunnelSolverReport(BaseModel):
+    total_considered: int
+    solver_called: int
+    solver_not_called: int
+    returned_none: int
+    produced_proof: int
+    proof_status_distribution: dict[str, int] = Field(default_factory=dict)
+    false_arbitrage_labels: dict[str, int] = Field(default_factory=dict)
+    threshold_rejects: int
+    decisions: list[SolverDecisionEntry] = Field(default_factory=list)
+
+
+class CandidateFunnelPersistenceReport(BaseModel):
+    solver_results: int
+    above_threshold: int
+    rejected_false_arbitrage: int
+    duplicate_dedup: int
+    persisted_candidates: int
+    persistence_failures: int
+
+
+class CandidateFunnelPreviewReport(BaseModel):
+    positive_displayed_edge: int
+    positive_executable_edge: int
+    failed_only_execution_evidence_missing: int
+    failed_only_identity_unverified: int
+    failed_only_profit_below_threshold: int
+
+
+class CandidateFunnelReport(BaseModel):
+    run_id: str
+    generated_at: datetime
+    markets: CandidateFunnelMarketsReport
+    compilation: CandidateFunnelCompilationReport
+    identity: CandidateFunnelIdentityReport
+    relations: CandidateFunnelRelationReport
+    solver: CandidateFunnelSolverReport
+    persistence: CandidateFunnelPersistenceReport
+    preview: CandidateFunnelPreviewReport
+    top_blockers: list[ReasonCount] = Field(default_factory=list)
+    report_version: str = "candidate-funnel-v1"
+
+
+class ShadowCandidateRow(BaseModel):
+    observation_id: str
+    run_id: str
+    relation_key: str
+    relation_kind: str
+    relation_type: str
+    market_ids: list[str] = Field(default_factory=list)
+    displayed_edge: float | None = None
+    executable_edge: float | None = None
+    worst_case_payoff: float | None = None
+    blocking_gates: list[str] = Field(default_factory=list)
+    minimal_relaxation: list[str] = Field(default_factory=list)
+    dangerous_relaxation: bool = False
+    relaxation_flags: dict[str, bool] = Field(default_factory=dict)
+    identity_status: str
+    proof_status: str
+    tradeable_relation: bool
+    false_arbitrage_label: str | None = None
+    rejected_by_threshold: bool = False
+    rejected_by_dedup: bool = False
+    execution_evidence_missing: bool = True
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ShadowCandidateListResponse(BaseModel):
+    run_id: str
+    generated_at: datetime
+    total: int
+    rows: list[ShadowCandidateRow] = Field(default_factory=list)
+    report_version: str = "shadow-candidates-v1"
+
+
+class SensitivityBucket(BaseModel):
+    label: str
+    count: int
+
+
+class SensitivityReport(BaseModel):
+    run_id: str
+    generated_at: datetime
+    min_profit_thresholds: list[SensitivityBucket] = Field(default_factory=list)
+    identity_gates: list[SensitivityBucket] = Field(default_factory=list)
+    semantic_thresholds: list[SensitivityBucket] = Field(default_factory=list)
+    execution_modes: list[SensitivityBucket] = Field(default_factory=list)
+    diagnostic_only: bool = True
+    report_version: str = "candidate-sensitivity-v1"

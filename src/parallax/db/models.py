@@ -27,6 +27,7 @@ class AuditEvent(Base):
     created_at: Mapped[datetime] = mapped_column(_TZ, index=True, default=_now)
     __table_args__ = (
         Index("ix_audit_events_entity_lookup", "entity_type", "entity_id", "created_at"),
+        Index("ix_audit_events_time_type", "created_at", "event_type"),
     )
 
 
@@ -278,10 +279,36 @@ class CandidateDecisionSnapshot(Base):
     relation_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     simulation_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     court_assessment: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    decision_ledger_entry: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     snapshot_version: Mapped[str] = mapped_column(String(100), default="decision-snapshot-v1")
     evaluated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
     __table_args__ = (
         Index("ix_candidate_decision_snapshots_run_evaluated", "run_id", "evaluated_at"),
+    )
+
+
+class DecisionLedgerRecord(Base):
+    __tablename__ = "decision_ledger_records"
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunity_candidates.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    decision: Mapped[str] = mapped_column(String(50), index=True)
+    source_of_truth: Mapped[str] = mapped_column(String(50), index=True)
+    fallback_status: Mapped[str] = mapped_column(String(50), default="none", index=True)
+    model_version: Mapped[str] = mapped_column(String(100), default="decision-ledger-v1")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    input_packet: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    relation_proof: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    execution_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    blocking_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    counterexamples: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    __table_args__ = (
+        Index("ix_decision_ledger_records_candidate_evaluated", "candidate_id", "evaluated_at"),
+        Index("ix_decision_ledger_records_run_evaluated", "run_id", "evaluated_at"),
     )
 
 
@@ -358,10 +385,64 @@ class SolverAuditRecordModel(Base):
     )
 
 
+class ShadowCandidateObservation(Base):
+    __tablename__ = "shadow_candidate_observations"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[str] = mapped_column(String(255), index=True)
+    relation_key: Mapped[str] = mapped_column(String(255), index=True)
+    relation_kind: Mapped[str] = mapped_column(String(50), index=True)
+    relation_type: Mapped[str] = mapped_column(String(100), index=True)
+    market_ids: Mapped[list] = mapped_column(JSON, default=list)
+    identity_status: Mapped[str] = mapped_column(String(50), default="unresolved", index=True)
+    identity_version: Mapped[str] = mapped_column(String(100), default="identity-v1")
+    proof_status: Mapped[str] = mapped_column(String(50), default="needs_review", index=True)
+    tradeable_relation: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    solver_called: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    solver_skip_reason: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    solver_none_reason: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    displayed_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    executable_edge: Mapped[float | None] = mapped_column(Float, nullable=True)
+    worst_case_payoff: Mapped[float | None] = mapped_column(Float, nullable=True)
+    valid_state_count: Mapped[int] = mapped_column(Integer, default=0)
+    impossible_state_count: Mapped[int] = mapped_column(Integer, default=0)
+    false_arbitrage_label: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    min_profit_threshold: Mapped[float] = mapped_column(Float, default=0.005)
+    rejected_by_threshold: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    rejected_by_identity: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    rejected_by_false_arbitrage: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    rejected_by_dedup: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    execution_evidence_missing: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    blocking_gates: Mapped[list] = mapped_column(JSON, default=list)
+    relaxation_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    minimal_relaxation: Mapped[list] = mapped_column(JSON, default=list)
+    dangerous_relaxation: Mapped[bool] = mapped_column(Boolean, default=False)
+    persisted_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("opportunity_candidates.id"), nullable=True, index=True
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+
+    __table_args__ = (
+        Index(
+            "ix_shadow_candidate_observations_run_kind_created",
+            "run_id",
+            "relation_kind",
+            "created_at",
+        ),
+        Index(
+            "ix_shadow_candidate_observations_run_relation_key",
+            "run_id",
+            "relation_key",
+        ),
+    )
+
+
 class PaperPosition(Base):
     __tablename__ = "paper_positions"
     id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunity_candidates.id"), index=True)
+    certificate_id: Mapped[uuid.UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="OPEN")
     legs_json: Mapped[list] = mapped_column(JSON)   # list[Leg.model_dump()]
     opened_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
@@ -508,7 +589,7 @@ class IdentityClusterMember(Base):
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
 
     __table_args__ = (
-        UniqueConstraint("cluster_id", "canonical_event_id", name="uq_cluster_member"),
+        UniqueConstraint("cluster_id", "raw_market_id", name="uq_cluster_member"),
         Index("ix_identity_cluster_members_cluster", "cluster_id", "added_at"),
     )
 
@@ -585,3 +666,153 @@ class IdentityMetric(Base):
     cluster_count: Mapped[int] = mapped_column(Integer, default=0)
     benchmark_accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
     metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class TradeProofCertificateRecord(Base):
+    __tablename__ = "trade_proof_certificates"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunity_candidates.id"), index=True)
+    run_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    generated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    certificate_version: Mapped[str] = mapped_column(String(100), default="trade-proof-certificate-v1")
+    certificate_status: Mapped[str] = mapped_column(String(50), default="draft", index=True)
+    market_data_snapshot_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    compiled_contract_versions: Mapped[list] = mapped_column(JSON, default=list)
+    contract_fingerprints: Mapped[dict] = mapped_column(JSON, default=dict)
+    identity_evidence_ids: Mapped[list] = mapped_column(JSON, default=list)
+    identity_status: Mapped[str] = mapped_column(String(50), default="unresolved")
+    identity_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    identity_provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    identity_cluster_ids: Mapped[list] = mapped_column(JSON, default=list)
+    relation_proof_ids: Mapped[list] = mapped_column(JSON, default=list)
+    relation_set_ids: Mapped[list] = mapped_column(JSON, default=list)
+    solver_proof_object_hash: Mapped[str] = mapped_column(String(255), index=True)
+    payoff_matrix_hash: Mapped[str] = mapped_column(String(255))
+    scenario_matrix_hash: Mapped[str] = mapped_column(String(255))
+    orderbook_snapshot_ids: Mapped[list] = mapped_column(JSON, default=list)
+    execution_model: Mapped[str] = mapped_column(String(50), default="heuristic")
+    execution_simulation_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    court_decision_snapshot_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    risk_score_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    policy_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    config_fingerprint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider_fingerprints: Mapped[dict] = mapped_column(JSON, default=dict)
+    invalidation_conditions: Mapped[list] = mapped_column(JSON, default=list)
+    invalidation_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    supersedes_certificate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("trade_proof_certificates.id"), nullable=True, index=True
+    )
+    degraded: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    __table_args__ = (
+        Index("ix_trade_proof_certificates_candidate_status_generated", "candidate_id", "certificate_status", "generated_at"),
+    )
+
+
+class CalibrationRunRecord(Base):
+    __tablename__ = "calibration_runs"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status: Mapped[str] = mapped_column(String(50), default="insufficient_data", index=True)
+    input_window_start: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    input_window_end: Mapped[datetime | None] = mapped_column(_TZ, nullable=True)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+    activated_policy_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+
+
+class ActivePolicyVersionRecord(Base):
+    __tablename__ = "active_policy_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    policy_version: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(50), default="candidate", index=True)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    court_thresholds: Mapped[dict] = mapped_column(JSON, default=dict)
+    risk_weights: Mapped[dict] = mapped_column(JSON, default=dict)
+    solver_penalties: Mapped[dict] = mapped_column(JSON, default=dict)
+    execution_calibration: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now, index=True)
+
+
+class OpportunityTypeScorecardRecord(Base):
+    __tablename__ = "opportunity_type_scorecards"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calibration_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("calibration_runs.id"), index=True)
+    opportunity_type: Mapped[str] = mapped_column(String(100), index=True)
+    scorecard_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class StrategyKillListRecord(Base):
+    __tablename__ = "strategy_kill_list"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    strategy_key: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    warning_level: Mapped[str] = mapped_column(String(50), default="watch", index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[dict] = mapped_column(JSON, default=dict)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class IdentityFeedbackEventRecord(Base):
+    __tablename__ = "identity_feedback_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calibration_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calibration_runs.id"), nullable=True, index=True)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity_candidates.id"), nullable=True, index=True)
+    feedback_type: Mapped[str] = mapped_column(String(100), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class SolverFeedbackEventRecord(Base):
+    __tablename__ = "solver_feedback_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calibration_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calibration_runs.id"), nullable=True, index=True)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity_candidates.id"), nullable=True, index=True)
+    feedback_type: Mapped[str] = mapped_column(String(100), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class ExecutionFeedbackEventRecord(Base):
+    __tablename__ = "execution_feedback_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calibration_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calibration_runs.id"), nullable=True, index=True)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity_candidates.id"), nullable=True, index=True)
+    feedback_type: Mapped[str] = mapped_column(String(100), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class OracleFeedbackEventRecord(Base):
+    __tablename__ = "oracle_feedback_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    calibration_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calibration_runs.id"), nullable=True, index=True)
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("opportunity_candidates.id"), nullable=True, index=True)
+    feedback_type: Mapped[str] = mapped_column(String(100), index=True)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+
+
+class HedgeIntentRecord(Base):
+    __tablename__ = "hedge_intents"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("opportunity_candidates.id"), index=True)
+    position_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("paper_positions.id"), nullable=True, index=True)
+    legs_to_unwind: Mapped[dict] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(50), default="pending", index=True)  # pending, completed, failed
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(_TZ, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(_TZ, default=_now, onupdate=_now)

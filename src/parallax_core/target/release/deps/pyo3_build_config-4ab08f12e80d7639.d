@@ -1,0 +1,14 @@
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/pyo3_build_config-4ab08f12e80d7639.d: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/errors.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/impl_.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config-file.txt /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config.txt
+
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/libpyo3_build_config-4ab08f12e80d7639.rlib: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/errors.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/impl_.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config-file.txt /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config.txt
+
+/home/administrator/tools/parallax/src/parallax_core/target/release/deps/libpyo3_build_config-4ab08f12e80d7639.rmeta: /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/lib.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/errors.rs /home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/impl_.rs /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config-file.txt /home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config.txt
+
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/lib.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/errors.rs:
+/home/administrator/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pyo3-build-config-0.25.1/src/impl_.rs:
+/home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config-file.txt:
+/home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out/pyo3-build-config.txt:
+
+# env-dep:CARGO_PKG_VERSION=0.25.1
+# env-dep:OUT_DIR=/home/administrator/tools/parallax/src/parallax_core/target/release/build/pyo3-build-config-8af36e212ec1e635/out

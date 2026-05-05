@@ -1,12 +1,18 @@
 import type {
+  CalibrationStatusResponse,
+  CandidateFunnelReport,
+  CertificateListResponse,
   AuditEvent,
   AutopsyRecord,
   BacktestReplayReport,
   CandidateDetail,
   CandidateSummary,
+  DecisionLedgerEntry,
   DecisionSnapshot,
   EvaluationReport,
   ExecutionReport,
+  IdentityClusterDetailResponse,
+  IdentityClusterQueueResponse,
   IdentityReviewQueueResponse,
   LogicalRelationSet,
   MarketDetail,
@@ -18,7 +24,12 @@ import type {
   RelationSetListResponse,
   RunProof,
   RunProofListResponse,
+  ScorecardListResponse,
+  SensitivityReport,
+  ShadowCandidateListResponse,
   SettlementRequest,
+  StrategyKillListResponse,
+  TradeProofCertificate,
 } from "../types";
 
 const API_TOKEN = import.meta.env.VITE_PARALLAX_API_TOKEN?.trim();
@@ -51,6 +62,10 @@ export const api = {
     list: () => get<CandidateSummary[]>("/api/candidates"),
     get: (id: string) => get<CandidateDetail>(`/api/candidates/${id}`),
     decision: (id: string) => get<DecisionSnapshot>(`/api/candidates/${id}/decision`),
+    decisionLedger: (id: string, limit = 50) =>
+      get<DecisionLedgerEntry[]>(`/api/candidates/${id}/decision-ledger?limit=${limit}`),
+    certificate: (id: string) => get<TradeProofCertificate>(`/api/candidates/${id}/certificate`),
+    issueCertificate: (id: string) => post<TradeProofCertificate>(`/api/candidates/${id}/certificate/issue`, {}),
     autopsy: (id: string) => get<AutopsyRecord[]>(`/api/candidates/${id}/autopsy`),
   },
   audit: {
@@ -68,10 +83,20 @@ export const api = {
     evaluation: () => get<EvaluationReport>("/api/ops/evaluation"),
     backtest: () => get<BacktestReplayReport>("/api/ops/backtest"),
     identityReview: () => get<IdentityReviewQueueResponse>("/api/ops/identity-review"),
+    identityClusters: () => get<IdentityClusterQueueResponse>("/api/ops/identity-clusters"),
+    identityCluster: (id: string) => get<IdentityClusterDetailResponse>(`/api/ops/identity-clusters/${id}`),
+    calibration: () => get<CalibrationStatusResponse>("/api/ops/calibration"),
+    activePolicy: () => get<CalibrationStatusResponse>("/api/ops/policy/active"),
+    scorecards: () => get<ScorecardListResponse>("/api/ops/scorecards"),
+    strategyKillList: () => get<StrategyKillListResponse>("/api/ops/strategy-kill-list"),
+    certificates: () => get<CertificateListResponse>("/api/ops/certificates"),
     policy: () => get<PolicyReport>("/api/ops/policy"),
     execution: () => get<ExecutionReport>("/api/ops/execution"),
     relationSets: () => get<RelationSetListResponse>("/api/ops/relation-sets"),
     relationSet: (setKey: string) => get<LogicalRelationSet>(`/api/ops/relation-sets/${encodeURIComponent(setKey)}`),
+    candidateFunnel: () => get<CandidateFunnelReport>("/api/ops/candidate-funnel"),
+    shadowCandidates: (limit = 20) => get<ShadowCandidateListResponse>(`/api/ops/shadow-candidates?limit=${limit}`),
+    sensitivity: () => get<SensitivityReport>("/api/ops/sensitivity"),
   },
   positions: {
     list: (status?: string) =>

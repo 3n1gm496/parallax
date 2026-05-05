@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 from parallax.audit.service import AuditService
 from parallax.db.models import CanonicalEvent, EventIdentityCluster, IdentityMatchReview, MarketEventLink
 from parallax.identity.cluster_engine import ClusterEngine
+from parallax.identity.cluster_repository import IdentityClusterRepository
 from parallax.identity.event_repository import EventRepository
+from parallax.identity.v3_service import IdentityV3Service
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.shared.schemas import IdentityResolutionStatus
 
@@ -24,6 +26,8 @@ class IdentityService:
         self._market_repo = MarketRepository(session)
         self._audit = AuditService(session)
         self._cluster_engine = ClusterEngine(session)
+        self._cluster_repo = IdentityClusterRepository(session)
+        self._v3 = IdentityV3Service(session)
 
     def get_or_create_event(
         self,
@@ -107,6 +111,8 @@ class IdentityService:
             provenance = self._base_provenance(market)
             link_reason = "new_event"
 
+            runtime_decision = self._v3.resolve_market(market)
+
             if market.group_id:
                 event, _ = self.get_or_create_event(
                     name=market.title,
@@ -119,8 +125,16 @@ class IdentityService:
                         "platform_group_match": True,
                         "decision": "linked",
                         "score": 1.0,
+                        "identity_type": runtime_decision.identity_type.value,
+                        "identity_cluster_id": runtime_decision.cluster_id,
                         "identity_status": IdentityResolutionStatus.VERIFIED.value,
-                        "identity_version": _IDENTITY_SCORER_VERSION,
+                        "identity_version": runtime_decision.provenance.get("identity_version", _IDENTITY_SCORER_VERSION),
+                        "cluster_ids": [runtime_decision.cluster_id] if runtime_decision.cluster_id else [],
+                        "identity_resolution_bundle": (
+                            runtime_decision.resolution_bundle.model_dump(mode="json")
+                            if runtime_decision.resolution_bundle is not None
+                            else None
+                        ),
                     }
                 )
                 self._record_identity_review(
@@ -135,41 +149,126 @@ class IdentityService:
                         "selected_candidate_score": 1.0,
                         "review_reasons": ["platform-native group id match"],
                         "alternatives": [],
+                        "identity_resolution_bundle": (
+                            runtime_decision.resolution_bundle.model_dump(mode="json")
+                            if runtime_decision.resolution_bundle is not None
+                            else None
+                        ),
                     },
                 )
             else:
                 review = self._match_existing_event(market, domain)
-                if review["selected_event"] is None:
+                if runtime_decision.status == IdentityResolutionStatus.VERIFIED:
+                    event = runtime_decision.canonical_event
+                    link_reason = "identity_v3_runtime_authority"
+                    provenance.update(
+                        {
+                            **runtime_decision.provenance,
+                            "decision": "linked",
+                            "score": runtime_decision.confidence,
+                            "identity_status": runtime_decision.status.value,
+                            "identity_type": runtime_decision.identity_type.value,
+                            "identity_cluster_id": runtime_decision.cluster_id,
+                            "cluster_ids": [runtime_decision.cluster_id] if runtime_decision.cluster_id else [],
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
+                        }
+                    )
+                    self._record_identity_review(
+                        raw_market_id=market.id,
+                        canonical_event_id=event.id,
+                        status=runtime_decision.status,
+                        score=runtime_decision.confidence,
+                        review_payload={
+                            **runtime_decision.provenance,
+                            "status": runtime_decision.status.value,
+                            "identity_type": runtime_decision.identity_type.value,
+                            "review_reasons": runtime_decision.blocking_reasons,
+                            "selected_candidate_id": str(event.id),
+                            "selected_candidate_score": runtime_decision.confidence,
+                            "cluster_id": runtime_decision.cluster_id,
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
+                        },
+                    )
+                elif review["selected_event"] is None:
                     event, _ = self.get_or_create_event(name=market.title, domain=domain)
                     provenance.update(
                         {
                             "decision": "created_new_event",
                             "score": 0.0,
-                            "identity_status": review["status"].value,
-                            "identity_version": _IDENTITY_SCORER_VERSION,
+                            "identity_status": runtime_decision.status.value,
+                            "identity_version": runtime_decision.provenance.get("identity_version", _IDENTITY_SCORER_VERSION),
+                            "identity_type": runtime_decision.identity_type.value,
+                            "identity_cluster_id": runtime_decision.cluster_id,
+                            "identity_blocking_reason": "; ".join(runtime_decision.blocking_reasons) if runtime_decision.blocking_reasons else None,
+                            "cluster_ids": [runtime_decision.cluster_id] if runtime_decision.cluster_id else [],
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
                         }
                     )
                     self._record_identity_review(
                         raw_market_id=market.id,
                         canonical_event_id=None,
-                        status=review["status"],
+                        status=runtime_decision.status,
                         score=0.0,
                         review_payload={
-                            **review["payload"],
+                            **runtime_decision.provenance,
+                            "status": runtime_decision.status.value,
+                            "identity_type": runtime_decision.identity_type.value,
+                            "review_reasons": runtime_decision.blocking_reasons,
                             "created_new_event": True,
                             "created_event_id": str(event.id),
+                            "cluster_id": runtime_decision.cluster_id,
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
                         },
                     )
                 else:
                     event = review["selected_event"]
-                    provenance.update(review["selected_provenance"])
+                    provenance.update(
+                        {
+                            **review["selected_provenance"],
+                            **runtime_decision.provenance,
+                            "identity_type": runtime_decision.identity_type.value,
+                            "identity_cluster_id": runtime_decision.cluster_id,
+                            "cluster_ids": [runtime_decision.cluster_id] if runtime_decision.cluster_id else [],
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
+                        }
+                    )
                     link_reason = "multi_signal_match"
                     self._record_identity_review(
                         raw_market_id=market.id,
                         canonical_event_id=event.id,
-                        status=review["status"],
-                        score=review["selected_score"],
-                        review_payload=review["payload"],
+                        status=runtime_decision.status if runtime_decision.status != IdentityResolutionStatus.VERIFIED else review["status"],
+                        score=review["selected_score"] if review["selected_score"] is not None else runtime_decision.confidence,
+                        review_payload={
+                            **review["payload"],
+                            "identity_type": runtime_decision.identity_type.value,
+                            "cluster_id": runtime_decision.cluster_id,
+                            "blocking_reasons": runtime_decision.blocking_reasons,
+                            "identity_resolution_bundle": (
+                                runtime_decision.resolution_bundle.model_dump(mode="json")
+                                if runtime_decision.resolution_bundle is not None
+                                else None
+                            ),
+                        },
                     )
 
             link = self.link_market(
@@ -178,11 +277,13 @@ class IdentityService:
                 link_reason=link_reason,
                 provenance=provenance,
             )
+            if runtime_decision.cluster_id:
+                provenance["cluster_ids"] = [runtime_decision.cluster_id]
             self._resolve_with_cluster(
                 market,
                 event.id,
                 link_reason=link_reason,
-                score=review["selected_score"] if "review" in locals() and review.get("selected_score") is not None else 1.0,
+                score=runtime_decision.confidence if runtime_decision.confidence is not None else (review["selected_score"] if "review" in locals() and review.get("selected_score") is not None else 1.0),
                 signals=provenance,
             )
             if link is not None:

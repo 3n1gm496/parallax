@@ -1,0 +1,19 @@
+site_name: Parallax HFT Engine
+site_description: Institutional-grade Arbitrage Engine Documentation
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.instant
+    - search.suggest
+    - search.highlight
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Hot Path (Rust): rust_core.md
+  - Cold Path (Python): python_core.md
+  - API Reference: api.md

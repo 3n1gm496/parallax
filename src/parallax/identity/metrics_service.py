@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from parallax.db.models import EventIdentityCluster, IdentityMatchReview, IdentityMetric
+from parallax.db.models import EventIdentityCluster, IdentityMatchReview, IdentityMetric, IdentitySplitMergeHistory
 from parallax.identity.benchmark import BenchmarkRunner
 from parallax.shared.schemas import IdentityResolutionStatus
 
@@ -21,6 +21,8 @@ class MetricsService:
         ambiguous_count = (
             self._session.query(IdentityMatchReview).filter_by(status=IdentityResolutionStatus.AMBIGUOUS.value).count()
         )
+        false_merge_count = self._session.query(IdentitySplitMergeHistory).filter_by(action="split").count()
+        false_split_count = self._session.query(IdentitySplitMergeHistory).filter_by(action="merge").count()
         benchmark = BenchmarkRunner(self._session).evaluate_all()
         metric = IdentityMetric(
             computed_at=datetime.now(timezone.utc),
@@ -28,12 +30,28 @@ class MetricsService:
             verified_count=verified_count,
             ambiguous_count=ambiguous_count,
             cluster_count=cluster_count,
+            false_merge_count=false_merge_count,
+            false_split_count=false_split_count,
             benchmark_accuracy=benchmark.accuracy if benchmark.total else None,
             metrics_json={
                 "benchmark_total": benchmark.total,
                 "benchmark_correct": benchmark.correct,
                 "benchmark_wrong": benchmark.wrong,
                 "benchmark_skipped": benchmark.skipped,
+                "unresolved_rate": round(
+                    self._session.query(IdentityMatchReview)
+                    .filter_by(status=IdentityResolutionStatus.UNRESOLVED.value)
+                    .count()
+                    / max(
+                        self._session.query(IdentityMatchReview).count(),
+                        1,
+                    ),
+                    4,
+                ),
+                "ambiguous_rate": round(
+                    ambiguous_count / max(self._session.query(IdentityMatchReview).count(), 1),
+                    4,
+                ),
             },
         )
         self._session.add(metric)

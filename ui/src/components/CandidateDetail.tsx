@@ -4,8 +4,10 @@ import type {
   AuditEvent,
   AutopsyRecord,
   CandidateDetail as CandidateDetailType,
+  DecisionLedgerEntry,
   MarketDetail,
   PositionSummary,
+  TradeProofCertificate,
 } from "../types";
 
 interface Props {
@@ -26,19 +28,25 @@ export function CandidateDetail({ candidateId, onClose }: Props) {
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [positions, setPositions] = useState<PositionSummary[]>([]);
   const [markets, setMarkets] = useState<MarketDetail[]>([]);
+  const [certificate, setCertificate] = useState<TradeProofCertificate | null>(null);
+  const [ledger, setLedger] = useState<DecisionLedgerEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setError(null);
     Promise.all([
       api.candidates.get(candidateId),
+      api.candidates.certificate(candidateId).catch(() => null),
+      api.candidates.decisionLedger(candidateId).catch(() => []),
       api.candidates.autopsy(candidateId),
       api.audit.byEntity("candidate", candidateId),
       api.positions.list(),
     ])
-      .then(async ([candidate, autopsyRows, auditRows, positionRows]) => {
+      .then(async ([candidate, certificateRow, ledgerRows, autopsyRows, auditRows, positionRows]) => {
         const marketRows = await Promise.all(candidate.market_ids.map((marketId) => api.markets.get(marketId)));
         setDetail(candidate);
+        setCertificate(certificateRow);
+        setLedger(ledgerRows);
         setAutopsy(autopsyRows);
         setAudit(auditRows);
         setPositions(positionRows.filter((row) => row.candidate_id === candidateId));
@@ -55,6 +63,9 @@ export function CandidateDetail({ candidateId, onClose }: Props) {
   const storedSimulation = snapshot?.simulation_result ?? null;
   const storedAssessment = snapshot?.court_assessment ?? null;
   const storedRelation = snapshot?.relation_evidence ?? null;
+  const storedLedgerEntry = snapshot?.decision_ledger_entry ?? null;
+  const proof = detail.proof_object;
+  const scenarioMatrix = detail.scenario_matrix;
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -124,7 +135,8 @@ export function CandidateDetail({ candidateId, onClose }: Props) {
                 <Metric label="Execution quality" value={simulation.execution_quality} />
                 <Metric label="Slippage" value={`${simulation.estimated_slippage_bps} bps`} />
                 <Metric label="Model" value={simulation.model_version} />
-                <Metric label="Exec model" value={simulation.execution_model ?? "heuristic"} />
+                <Metric label="Execution path" value={simulation.execution_path} />
+                <Metric label="Legacy model" value={simulation.execution_model ?? "legacy-compat"} />
                 {simulation.depth_support !== null && simulation.depth_support !== undefined && (
                   <Metric label="Depth support" value={simulation.depth_support ? "yes" : "no"} />
                 )}
@@ -220,6 +232,117 @@ export function CandidateDetail({ candidateId, onClose }: Props) {
               </>
             ) : (
               <p style={{ color: "#9fb4ca" }}>No live court assessment.</p>
+            )}
+          </section>
+        </div>
+
+        <section style={cardStyle}>
+          <h3 style={{ marginTop: 0 }}>Decision Ledger</h3>
+          {storedLedgerEntry && (
+            <div style={{ color: "#bfd3ea", marginBottom: 10 }}>
+              snapshot {storedLedgerEntry.decision} · {storedLedgerEntry.source_of_truth} · {storedLedgerEntry.fallback_status}
+            </div>
+          )}
+          {ledger.length > 0 ? (
+            <div style={{ display: "grid", gap: 10 }}>
+              {ledger.map((entry) => (
+                <div
+                  key={`${entry.candidate_id}-${entry.evaluated_at}-${entry.model_version}`}
+                  style={{
+                    borderRadius: 12,
+                    padding: 12,
+                    border: "1px solid rgba(148, 163, 184, 0.16)",
+                    background: "rgba(2, 6, 23, 0.28)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                    <strong>{entry.decision}</strong>
+                    <span style={{ color: "#9fb4ca" }}>
+                      {new Date(entry.evaluated_at).toLocaleString()} · {entry.model_version}
+                    </span>
+                  </div>
+                  <div style={{ color: "#dce7f5", marginTop: 6 }}>
+                    source {entry.source_of_truth} · fallback {entry.fallback_status}
+                  </div>
+                  <div style={{ color: "#bfd3ea", marginTop: 6 }}>
+                    confidence {entry.confidence == null ? "n/a" : entry.confidence.toFixed(3)}
+                    {entry.score == null ? "" : ` · score ${entry.score.toFixed(4)}`}
+                  </div>
+                  {entry.blocking_reason && (
+                    <div style={{ color: "#fca5a5", marginTop: 6 }}>{entry.blocking_reason}</div>
+                  )}
+                  <div style={{ color: "#9fb4ca", marginTop: 6 }}>
+                    counterexamples {entry.counterexamples.length} · packet {entry.input_packet ? "present" : "missing"} · proof{" "}
+                    {entry.relation_proof ? "present" : "missing"} · execution {entry.execution_evidence ? "present" : "missing"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: "#9fb4ca" }}>No ledger entries.</p>
+          )}
+        </section>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 16 }}>
+          <section style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>Certificate</h3>
+            {certificate ? (
+              <>
+                <Metric label="Status" value={certificate.certificate_status} />
+                <Metric label="Identity" value={`${certificate.identity_status}${certificate.degraded ? " · degraded" : ""}`} />
+                <Metric label="Execution model" value={certificate.execution_model} />
+                <Metric label="Policy" value={certificate.policy_version ?? "n/a"} />
+                <div style={{ color: "#bfd3ea", marginTop: 8 }}>
+                  proof {certificate.solver_proof_object_hash.slice(0, 12)} · payoff {certificate.payoff_matrix_hash.slice(0, 12)}
+                </div>
+                <div style={{ color: "#9fb4ca", marginTop: 8 }}>
+                  snapshots {certificate.orderbook_snapshot_ids.join(", ") || "n/a"}
+                </div>
+                {certificate.invalidation_reason && (
+                  <div style={{ color: "#fca5a5", marginTop: 8 }}>{certificate.invalidation_reason}</div>
+                )}
+              </>
+            ) : (
+              <p style={{ color: "#9fb4ca" }}>No certificate issued or drafted.</p>
+            )}
+          </section>
+
+          <section style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>Proof</h3>
+            {proof ? (
+              <>
+                <Metric label="Proof status" value={proof.proof_status} />
+                <Metric label="Solver" value={proof.solver_version} />
+                <Metric label="Identity version" value={proof.identity_version} />
+                <Metric label="Executable pricing" value={proof.executable_pricing_used ? "yes" : "no"} />
+                <div style={{ color: "#bfd3ea", marginTop: 8 }}>
+                  assumptions: {proof.assumptions.join(" · ") || "n/a"}
+                </div>
+                <pre style={{ whiteSpace: "pre-wrap", color: "#9fb4ca", marginBottom: 0 }}>
+                  {JSON.stringify(proof.payoff_by_state, null, 2)}
+                </pre>
+              </>
+            ) : (
+              <p style={{ color: "#9fb4ca" }}>No proof object.</p>
+            )}
+          </section>
+
+          <section style={cardStyle}>
+            <h3 style={{ marginTop: 0 }}>State Space</h3>
+            {scenarioMatrix ? (
+              <>
+                <Metric label="Valid states" value={String(scenarioMatrix.valid_states.length)} />
+                <Metric label="Impossible states" value={String(scenarioMatrix.impossible_states.length)} />
+                <Metric label="Mode" value={scenarioMatrix.enumeration_mode} />
+                {scenarioMatrix.blocked_reason && (
+                  <div style={{ color: "#fca5a5", marginTop: 8 }}>{scenarioMatrix.blocked_reason}</div>
+                )}
+                <pre style={{ whiteSpace: "pre-wrap", color: "#9fb4ca", marginBottom: 0 }}>
+                  {JSON.stringify(scenarioMatrix.valid_states.slice(0, 6), null, 2)}
+                </pre>
+              </>
+            ) : (
+              <p style={{ color: "#9fb4ca" }}>No scenario matrix.</p>
             )}
           </section>
         </div>

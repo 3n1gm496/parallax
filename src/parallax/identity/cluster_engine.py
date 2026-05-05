@@ -7,8 +7,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from parallax.db.models import EventIdentityCluster, IdentityClusterMember, RawMarket
-from parallax.identity.classifier import PairClassifier
-from parallax.identity.embedding_provider import EmbeddingProvider, TokenVectorProvider
+from parallax.identity.alignment_engine import SemanticAlignmentEngine
 from parallax.identity.normalizer import DeadlineNormalizer, EntityNormalizer, SourceNormalizer
 from parallax.shared.schemas import IdentityType
 
@@ -26,79 +25,19 @@ class ClusterDecision:
 
 
 class ClusterEngine:
-    def __init__(self, session: Session, embedding_provider: EmbeddingProvider | None = None) -> None:
+    def __init__(self, session: Session) -> None:
         self._session = session
-        self._embed = embedding_provider or TokenVectorProvider()
-        self._classifier = PairClassifier()
+        self._alignment_engine = SemanticAlignmentEngine()
         self._entity_n = EntityNormalizer()
         self._source_n = SourceNormalizer()
         self._deadline_n = DeadlineNormalizer()
 
     def score_pair(self, market_a, market_b) -> dict:
-        platform_group_match = bool(
-            market_a.group_id and market_b.group_id and market_a.group_id == market_b.group_id
-        )
-        if platform_group_match:
-            return {
-                "score": 1.0,
-                "platform_group_match": True,
-                "lexical_score": 1.0,
-                "embedding_score": 1.0,
-                "deadline_delta_hours": 0.0,
-                "oracle_mismatch": False,
-                "source_mismatch": False,
-                "entity_overlap": 99,
-                "predicate_match": True,
-                "subset_signal": False,
-                "superset_signal": False,
-            }
-
-        lexical = self._entity_n.jaccard(market_a.title, market_b.title)
-        embedding = self._embed.similarity(market_a.title, market_b.title)
-        deadline_delta = self._deadline_delta_hours(market_a.deadline, market_b.deadline)
-        oracle_mismatch = self._oracle_mismatch(market_a, market_b)
-        source_mismatch = self._source_mismatch(market_a, market_b)
-        overlap_count = len(self._entity_n.token_set(market_a.title) & self._entity_n.token_set(market_b.title))
-        subset_signal, superset_signal = self._subset_flags(market_a.title, market_b.title)
-        score = round(
-            0.35 * lexical
-            + 0.35 * embedding
-            + (0.15 if deadline_delta <= 24 else 0.0)
-            + (0.075 if not oracle_mismatch else 0.0)
-            + (0.05 if overlap_count >= 2 else 0.0)
-            + (0.025 if not source_mismatch else 0.0),
-            4,
-        )
-        if overlap_count <= 1 and lexical < 0.3 and embedding < 0.45:
-            score = min(score, 0.29)
-        return {
-            "score": score,
-            "platform_group_match": False,
-            "lexical_score": lexical,
-            "embedding_score": embedding,
-            "deadline_delta_hours": deadline_delta,
-            "oracle_mismatch": oracle_mismatch,
-            "source_mismatch": source_mismatch,
-            "entity_overlap": overlap_count,
-            "predicate_match": lexical >= 0.5 or embedding >= 0.65,
-            "subset_signal": subset_signal,
-            "superset_signal": superset_signal,
-        }
+        return self._alignment_engine.align_pair(market_a, market_b)
 
     def classify_pair(self, market_a, market_b) -> IdentityType:
-        signals = self.score_pair(market_a, market_b)
-        return self._classifier.classify(
-            lexical_score=signals["lexical_score"],
-            predicate_match=signals["predicate_match"],
-            entity_overlap=signals["entity_overlap"],
-            deadline_delta_hours=signals["deadline_delta_hours"],
-            oracle_mismatch=signals["oracle_mismatch"],
-            source_mismatch=signals["source_mismatch"],
-            platform_group_match=signals["platform_group_match"],
-            subset_signal=signals["subset_signal"],
-            superset_signal=signals["superset_signal"],
-            embedding_score=signals["embedding_score"],
-        )
+        res = self._alignment_engine.align_pair(market_a, market_b)
+        return res["identity_type"]
 
     def find_or_create_singleton_cluster(self, canonical_event_id: uuid.UUID, raw_market_id: str) -> EventIdentityCluster:
         cluster_key = self.build_cluster_key([raw_market_id])
@@ -158,7 +97,7 @@ class ClusterEngine:
                 provenance={
                     **signals,
                     "scorer_version": _SCORER_VERSION,
-                    "embedding_version": self._embed.version,
+                    "embedding_version": "semantic-v1",
                     "compared_to_market_id": primary_market.id,
                 },
             )

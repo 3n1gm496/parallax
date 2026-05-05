@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from parallax.db.models import RawMarket
+from parallax.execution.schemas import OrderbookLevel, OrderbookSide, OrderbookSnapshot
 from parallax.shared.schemas import (
     IdentityResolutionStatus,
     LogicalRelationSchema,
@@ -27,6 +28,24 @@ def _market(mid: str, platform: str, yes_price: float) -> RawMarket:
         deadline=datetime(2026, 12, 31, tzinfo=timezone.utc),
         is_closed=False,
         raw_payload={},
+    )
+
+
+def _orderbook(market_id: str, platform: str, mid: float) -> OrderbookSnapshot:
+    """Build a two-level synthetic orderbook around `mid`."""
+    spread = 0.005
+    ask = min(mid + spread / 2, 0.999)
+    bid = max(mid - spread / 2, 0.001)
+    return OrderbookSnapshot(
+        id=f"snap:{market_id}",
+        platform=platform,
+        market_id=market_id,
+        outcome="YES",
+        captured_at=datetime.now(timezone.utc),
+        bids=OrderbookSide(levels=[OrderbookLevel(price=bid, size=200.0)]),
+        asks=OrderbookSide(levels=[OrderbookLevel(price=ask, size=200.0)]),
+        mid_price=mid,
+        spread_bps=spread * 10_000,
     )
 
 
@@ -70,6 +89,10 @@ def test_equivalent_pair_has_serializable_proof_and_positive_worst_case():
         markets=markets,
         relation_evidence=_evidence("pm:a", "kalshi:b", RelationType.EQUIVALENT),
         relations=[relation],
+        orderbooks={
+            "pm:a":     _orderbook("pm:a",     "polymarket", 0.40),
+            "kalshi:b": _orderbook("kalshi:b", "kalshi",     0.55),
+        },
     )
 
     assert result is not None
@@ -106,6 +129,11 @@ def test_exhaustive_partition_uses_relation_set_as_source_of_truth():
             set_key="pm:a|pm:b|pm:c",
         ),
         relation_sets=[relation_set],
+        orderbooks={
+            "pm:a": _orderbook("pm:a", "polymarket", 0.40),
+            "pm:b": _orderbook("pm:b", "polymarket", 0.36),
+            "pm:c": _orderbook("pm:c", "polymarket", 0.35),
+        },
     )
 
     assert result is not None

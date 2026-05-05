@@ -14,21 +14,22 @@ from parallax.shared.schemas import (
 
 def build_fixture_library() -> SolverFixtureLibrary:
     deadline = datetime(2026, 12, 31, tzinfo=timezone.utc)
-    fixture_markets = lambda items: [
-        RawMarketData(
-            platform=platform,
-            market_id=market_id,
-            title=title,
-            description="fixture",
-            resolution_criteria="fixture",
-            outcomes=["Yes", "No"],
-            outcome_prices=[price, 1 - price],
-            deadline=deadline,
-            is_closed=False,
-            raw_payload={},
-        )
-        for platform, market_id, title, price in items
-    ]
+    def fixture_markets(items):
+        return [
+            RawMarketData(
+                platform=platform,
+                market_id=market_id,
+                title=title,
+                description="fixture",
+                resolution_criteria="fixture",
+                outcomes=["Yes", "No"],
+                outcome_prices=[price, 1 - price],
+                deadline=deadline,
+                is_closed=False,
+                raw_payload={},
+            )
+            for platform, market_id, title, price in items
+        ]
     return SolverFixtureLibrary(
         fixtures=[
             SolverFixtureCase(

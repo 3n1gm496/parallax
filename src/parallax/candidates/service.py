@@ -65,6 +65,7 @@ class CandidateReadService:
             raise ValueError(f"Candidate {candidate_id} not found")
 
         matrix = PayoffMatrix.model_validate(row.payoff_matrix)
+        scenario_matrix, proof_object = self._repo.get_solver_artifacts(candidate_id)
         try:
             risk = RiskScore.model_validate(row.risk_scores) if row.risk_scores else None
         except Exception:
@@ -75,6 +76,10 @@ class CandidateReadService:
             opportunity_type=OpportunityType(row.opportunity_type),
             market_ids=row.market_ids,
             payoff_matrix=matrix,
+            scenario_matrix=scenario_matrix,
+            proof_object=proof_object,
+            basket=row.basket_json or {},
+            false_arbitrage_label=row.false_arbitrage_label,
             risk_score=risk,
             decision_snapshot=self.get_decision_snapshot(candidate_id),
             simulation_result=self._simulator.simulate(candidate_id),
@@ -86,3 +91,6 @@ class CandidateReadService:
 
     def get_decision_snapshot(self, candidate_id: str) -> DecisionSnapshot | None:
         return self._repo.snapshot_to_schema(self._repo.get_decision_snapshot(candidate_id))
+
+    def list_decision_ledger_entries(self, candidate_id: str, *, limit: int = 100):
+        return self._repo.list_decision_ledger_entries(candidate_id, limit=limit)

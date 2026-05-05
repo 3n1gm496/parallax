@@ -4,11 +4,20 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from parallax.api.deps import get_read_session, get_write_session, require_read_access, require_write_access
+from parallax.calibration.service import CalibrationService
+from parallax.certificates.service import CertificateService
+from parallax.identity.cluster_repository import IdentityClusterRepository
+from parallax.identity.v3_service import IdentityV3Service
+from parallax.ops.candidate_funnel import CandidateDiagnosticsService
 from parallax.ops.execution_report import ExecutionReportService
 from parallax.ops.schemas import (
     BacktestReplayReport,
+    CandidateFunnelReport,
+    CalibrationStatusResponse,
+    CertificateListResponse,
     EvaluationReport,
     ExecutionReport,
+    IdentityClusterDetailResponse,
     IdentityClusterQueueResponse,
     IdentityMetricsReport,
     IdentityReviewQueueResponse,
@@ -17,7 +26,11 @@ from parallax.ops.schemas import (
     PolicyReport,
     ProofBundleReport,
     RelationSetListResponse,
+    ScorecardListResponse,
+    SensitivityReport,
+    ShadowCandidateListResponse,
     SplitClusterRequest,
+    StrategyKillListResponse,
     RunProof,
     RunProofListResponse,
 )
@@ -107,6 +120,89 @@ def get_identity_clusters(
     return get_identity_cluster_queue(session, limit=limit)
 
 
+@router.get("/ops/identity-clusters/{cluster_id}", response_model=IdentityClusterDetailResponse)
+def get_identity_cluster_detail(
+    cluster_id: str,
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> IdentityClusterDetailResponse:
+    repo = IdentityClusterRepository(session)
+    cluster = repo.get_cluster(_uuid.UUID(cluster_id))
+    if cluster is None:
+        raise HTTPException(status_code=404, detail="Identity cluster not found")
+    members = repo.list_members(cluster.id)
+    actions = repo.list_review_actions(cluster.id)
+    history = [
+        row
+        for row in repo.list_split_merge_history(limit=100)
+        if cluster_id in (row.source_cluster_ids or []) or cluster_id in (row.target_cluster_ids or [])
+    ]
+    entry = get_identity_cluster_queue(session, limit=1000)
+    cluster_entry = next((item for item in entry.clusters if item.cluster_id == cluster_id), None)
+    if cluster_entry is None:
+        raise HTTPException(status_code=404, detail="Identity cluster not found")
+    return IdentityClusterDetailResponse(
+        cluster=cluster_entry,
+        members=[
+            {
+                "member_id": str(member.id),
+                "raw_market_id": member.raw_market_id,
+                "canonical_event_id": str(member.canonical_event_id),
+                "member_role": member.member_role,
+                "added_at": member.added_at,
+                "evidence": member.evidence or {},
+            }
+            for member in members
+        ],
+        review_actions=[
+            {
+                "action_id": str(row.id),
+                "action": row.action,
+                "reviewer": row.reviewer,
+                "reason": row.reason,
+                "evidence": row.evidence or {},
+                "acted_at": row.acted_at,
+            }
+            for row in actions
+        ],
+        split_merge_history=[
+            {
+                "history_id": str(row.id),
+                "action": row.action,
+                "source_cluster_ids": row.source_cluster_ids,
+                "target_cluster_ids": row.target_cluster_ids,
+                "triggered_by": row.triggered_by,
+                "reason": row.reason,
+                "acted_at": row.acted_at,
+            }
+            for row in history
+        ],
+    )
+
+
+@router.post("/ops/identity-clusters/{cluster_id}/review")
+def review_identity_cluster(
+    cluster_id: str,
+    body: dict[str, object],
+    _auth: None = Depends(require_write_access),
+    session: Session = Depends(get_write_session),
+) -> dict[str, str]:
+    action = str(body.get("action") or "abstain")
+    reviewer = str(body.get("reviewer") or body.get("triggered_by") or "operator")
+    reason = str(body.get("reason")) if body.get("reason") is not None else None
+    try:
+        IdentityV3Service(session).review_cluster(
+            cluster_id,
+            action=action,
+            reviewer=reviewer,
+            reason=reason,
+            evidence=body if isinstance(body, dict) else {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"cluster_id": cluster_id, "status": "reviewed"}
+
+
 @router.post("/ops/identity-clusters/{cluster_id}/split")
 def split_cluster(
     cluster_id: str,
@@ -174,6 +270,84 @@ def get_policy_report(
     return get_policy_report_payload(session)
 
 
+@router.get("/ops/calibration", response_model=CalibrationStatusResponse)
+def get_calibration_status(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> CalibrationStatusResponse:
+    svc = CalibrationService(session)
+    latest = svc.latest_run()
+    active = svc.active_policy()
+    return CalibrationStatusResponse(
+        latest_run=CalibrationService.run_to_schema(latest) if latest is not None else None,
+        active_policy=CalibrationService.policy_to_schema(active) if active is not None else None,
+    )
+
+
+@router.get("/ops/policy/active", response_model=CalibrationStatusResponse)
+def get_active_policy_status(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> CalibrationStatusResponse:
+    svc = CalibrationService(session)
+    active = svc.active_policy()
+    return CalibrationStatusResponse(
+        latest_run=None,
+        active_policy=CalibrationService.policy_to_schema(active) if active is not None else None,
+    )
+
+
+@router.get("/ops/scorecards", response_model=ScorecardListResponse)
+def get_scorecards(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> ScorecardListResponse:
+    items = CalibrationService(session).list_scorecards()
+    return ScorecardListResponse(
+        items=[
+            {
+                "scorecard_id": str(item.id),
+                "calibration_run_id": str(item.calibration_run_id),
+                "opportunity_type": item.opportunity_type,
+                "scorecard": item.scorecard_json or {},
+                "created_at": item.created_at,
+            }
+            for item in items
+        ]
+    )
+
+
+@router.get("/ops/strategy-kill-list", response_model=StrategyKillListResponse)
+def get_strategy_kill_list(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> StrategyKillListResponse:
+    items = CalibrationService(session).list_strategy_kill_list()
+    return StrategyKillListResponse(
+        items=[
+            {
+                "strategy_key": item.strategy_key,
+                "warning_level": item.warning_level,
+                "reason": item.reason,
+                "evidence": item.evidence or {},
+                "active": item.active,
+                "created_at": item.created_at,
+            }
+            for item in items
+        ]
+    )
+
+
+@router.get("/ops/certificates", response_model=CertificateListResponse)
+def list_certificates(
+    limit: int = Query(default=100, ge=1, le=500),
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> CertificateListResponse:
+    items = CertificateService(session).list_certificates(limit=limit)
+    return CertificateListResponse(items=[CertificateService.to_schema(item) for item in items])
+
+
 @router.get("/ops/relation-sets", response_model=RelationSetListResponse)
 def list_relation_sets(
     limit: int = Query(default=100, ge=1, le=500),
@@ -210,3 +384,46 @@ def get_proof_bundle(
     session: Session = Depends(get_read_session),
 ) -> ProofBundleReport:
     return get_proof_bundle_payload(session)
+
+
+@router.get("/ops/candidate-funnel", response_model=CandidateFunnelReport)
+def get_candidate_funnel(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> CandidateFunnelReport:
+    try:
+        return CandidateDiagnosticsService(session).build_candidate_funnel_report()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/ops/candidate-funnel/{run_id}", response_model=CandidateFunnelReport)
+def get_candidate_funnel_for_run(
+    run_id: str,
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> CandidateFunnelReport:
+    return CandidateDiagnosticsService(session).build_candidate_funnel_report(run_id)
+
+
+@router.get("/ops/shadow-candidates", response_model=ShadowCandidateListResponse)
+def get_shadow_candidates(
+    limit: int = Query(default=20, ge=1, le=200),
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> ShadowCandidateListResponse:
+    try:
+        return CandidateDiagnosticsService(session).build_shadow_candidates_report(limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/ops/sensitivity", response_model=SensitivityReport)
+def get_sensitivity_report(
+    _auth: None = Depends(require_read_access),
+    session: Session = Depends(get_read_session),
+) -> SensitivityReport:
+    try:
+        return CandidateDiagnosticsService(session).build_sensitivity_report()
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

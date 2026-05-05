@@ -6,12 +6,22 @@ from parallax.shared.schemas import OutcomeState, OutcomeStateSpace, RelationTyp
 
 
 class OutcomeStateSpaceBuilder:
+    MAX_CUSTOM_ENUMERATION = 8
+
     def enumerate(
         self,
         *,
         market_ids: list[str],
         constraints: list[ScenarioConstraintModel],
     ) -> OutcomeStateSpace:
+        if len(market_ids) > self.MAX_CUSTOM_ENUMERATION:
+            return OutcomeStateSpace(
+                market_ids=market_ids,
+                valid_states=[],
+                impossible_states=[],
+                enumeration_mode="custom",
+                blocked_reason=f"state space too large for deterministic custom enumeration: {len(market_ids)} markets",
+            )
         valid_states: list[OutcomeState] = []
         impossible_states: list[OutcomeState] = []
 
@@ -39,6 +49,7 @@ class OutcomeStateSpaceBuilder:
             valid_states=valid_states,
             impossible_states=impossible_states,
             enumeration_mode="custom",
+            breaking_state_ids=[],
         )
 
     def _satisfies(self, assignments: dict[str, str], constraint: ScenarioConstraintModel) -> bool:

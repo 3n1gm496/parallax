@@ -9,7 +9,6 @@ from parallax.execution.kalshi_quote_adapter import (
     _parse_kalshi_sides,
     _parse_cents_side,
 )
-from parallax.execution.schemas import OrderbookSide
 
 
 def _mock_client(status: int = 200, json_body: dict | None = None) -> httpx.AsyncClient:

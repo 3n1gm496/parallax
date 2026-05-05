@@ -1,8 +1,10 @@
 from __future__ import annotations
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from parallax.candidates.evidence import load_relation_evidence
 from parallax.candidates.repository import CandidateRepository
 from parallax.db.models import RawMarket
+from parallax.execution.schemas import OrderbookLevel, OrderbookSide, OrderbookSnapshot
 from parallax.graph.repository import GraphRepository
 from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import (
@@ -30,7 +32,7 @@ class DivergenceService:
         self._graph_repo = graph_repo
         self._candidate_repo = CandidateRepository(session)
         self._friction_bps = friction_bps
-        self._solver = GeneralizedPayoffSolver(friction_bps=friction_bps)
+        self._solver = GeneralizedPayoffSolver(friction_bps=friction_bps, session=session)
 
     def scan(self, markets: list[RawMarket]) -> int:
         """Check all relations for profitable divergences. Returns count of new candidates."""
@@ -46,11 +48,15 @@ class DivergenceService:
             relation_evidence = load_relation_evidence(self._session, member_ids)
             if relation_evidence is None:
                 continue
+            orderbooks = self._build_orderbooks(
+                [market_map[market_id] for market_id in member_ids]
+            )
             result = self._solve_candidate(
                 [market_map[market_id] for market_id in member_ids],
                 relation_evidence=relation_evidence,
                 relation_sets=[relation_set],
                 relations=[],
+                orderbooks=orderbooks,
             )
             if result is None:
                 continue
@@ -76,16 +82,21 @@ class DivergenceService:
                 if str(relation_evidence.proof_status) != "verified":
                     continue
 
-                rtype = RelationType(rel["relation_type"])
+
+
                 a_id, b_id = rel["from_market_id"], rel["to_market_id"]
                 if a_id not in market_map or b_id not in market_map:
                     continue
 
+                a_market = market_map[a_id]
+                b_market = market_map[b_id]
+                orderbooks = self._build_orderbooks([a_market, b_market])
                 result = self._solve_candidate(
-                    [market_map[a_id], market_map[b_id]],
+                    [a_market, b_market],
                     relation_evidence=relation_evidence,
                     relation_sets=[],
                     relations=[self._relation_dict_to_schema(rel)],
+                    orderbooks=orderbooks,
                 )
                 if result is None:
                     continue
@@ -135,13 +146,47 @@ class DivergenceService:
         relation_evidence,
         relation_sets: list[LogicalRelationSetSchema],
         relations: list[LogicalRelationSchema],
+        orderbooks: dict[str, OrderbookSnapshot] | None = None,
     ):
         return self._solver.solve(
             markets=markets,
             relation_evidence=relation_evidence,
             relation_sets=relation_sets,
             relations=relations,
+            orderbooks=orderbooks,
         )
+
+    @staticmethod
+    def _build_orderbooks(markets: list[RawMarket]) -> dict[str, OrderbookSnapshot]:
+        """Construct synthetic single-level OrderbookSnapshots from stored outcome_prices."""
+        _PLATFORM_ALIASES: dict[str, str] = {
+            "pm": "polymarket",
+            "poly": "polymarket",
+            "polymarket": "polymarket",
+            "kalshi": "kalshi",
+        }
+        obs: dict[str, OrderbookSnapshot] = {}
+        now = datetime.now(timezone.utc)
+        for m in markets:
+            if not m.outcome_prices or not isinstance(m.outcome_prices[0], (int, float)):
+                continue
+            mid = float(m.outcome_prices[0])
+            platform_str = _PLATFORM_ALIASES.get(m.platform, m.platform)
+            spread = 0.005  # 50bps synthetic spread
+            ask_px = min(mid + spread / 2, 0.999)
+            bid_px = max(mid - spread / 2, 0.001)
+            obs[m.id] = OrderbookSnapshot(
+                id=f"synth:{m.id}",
+                platform=platform_str,
+                market_id=m.id,
+                outcome="YES",
+                captured_at=now,
+                bids=OrderbookSide(levels=[OrderbookLevel(price=bid_px, size=100.0)]),
+                asks=OrderbookSide(levels=[OrderbookLevel(price=ask_px, size=100.0)]),
+                mid_price=mid,
+                spread_bps=spread * 10_000,
+            )
+        return obs
 
     def _list_tradeable_relation_sets(self) -> list[LogicalRelationSetSchema]:
         if not hasattr(self._graph_repo, "list_relation_sets"):

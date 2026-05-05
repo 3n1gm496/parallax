@@ -65,7 +65,7 @@ class TestSettlementScannerService:
         market = _make_market(is_closed=False, yes_price=0.95)
 
         session = MagicMock()
-        from parallax.db.models import OpportunityCandidate, RawMarket
+        from parallax.db.models import OpportunityCandidate
         session.get.side_effect = lambda cls, pk: (
             cand if cls is OpportunityCandidate else (market if str(pk) == MKT_A else None)
         )
