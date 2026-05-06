@@ -21,6 +21,13 @@ def mock_clients(monkeypatch):
     
     return kalshi_orders, poly_orders
 
+@pytest.fixture(autouse=True)
+def setup_test_env():
+    # Ensure a clean environment for each test
+    settings.app_env = "test"
+    settings.runtime_auto_unwind_enabled = True
+    yield
+
 @pytest.mark.anyio
 async def test_unwind_engine_success(mock_clients):
     settings.runtime_auto_unwind_enabled = True

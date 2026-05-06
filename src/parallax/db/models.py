@@ -450,6 +450,7 @@ class PaperPosition(Base):
     actual_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     __table_args__ = (
         Index("ix_paper_positions_candidate_status_opened", "candidate_id", "status", "opened_at"),
+        Index("ix_paper_positions_legs_gin", "legs_json", postgresql_using="gin"),
     )
 
 

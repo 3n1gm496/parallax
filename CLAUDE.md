@@ -7,9 +7,9 @@ Parallax should stay architecturally ambitious while remaining explicit about wh
 ## First files to read
 
 1. [README.md](/home/administrator/tools/parallax/README.md:1)
-2. [docs/STATUS.md](/home/administrator/tools/parallax/docs/STATUS.md:1)
-3. [docs/RUNTIME.md](/home/administrator/tools/parallax/docs/RUNTIME.md:1)
-4. [docs/REPOSITORY.md](/home/administrator/tools/parallax/docs/REPOSITORY.md:1)
+2. [docs/ARCHITECTURE.md](/home/administrator/tools/parallax/docs/ARCHITECTURE.md:1)
+3. [docs/RUNBOOK.md](/home/administrator/tools/parallax/docs/RUNBOOK.md:1)
+4. [docs/API.md](/home/administrator/tools/parallax/docs/API.md:1)
 5. [docs/decisions/README.md](/home/administrator/tools/parallax/docs/decisions/README.md:1)
 
 ## Working style
@@ -28,7 +28,7 @@ Parallax should stay architecturally ambitious while remaining explicit about wh
 
 ## Important repo facts
 
-- Backend stack: Python 3.13, SQLAlchemy 2.0, Pydantic v2, FastAPI, Anthropic SDK.
+- Backend stack: Python 3.13, Rust Core (PyO3), SQLAlchemy 2.0, msgspec, FastAPI, Anthropic SDK.
 - Frontend shell: `ui/` with Vite + React.
 - Unit suite is expected to pass locally.
 - Integration tests depend on `postgres_test` on port `5433` and may skip cleanly when unavailable.
@@ -42,6 +42,7 @@ make down
 make migrate
 make test
 make test-integration
+make benchmark
 make lint
 make pipeline
 make api

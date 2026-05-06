@@ -19,6 +19,34 @@ class KalshiExecutionClient:
     def __init__(self, http_client: httpx.AsyncClient | None = None):
         self._client = http_client
         self._base_url = "https://api.elections.kalshi.com/trade-api/v2"
+        self._own_client = False
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=10.0, limits=httpx.Limits(max_connections=10))
+            self._own_client = True
+
+    async def aclose(self):
+        if self._own_client and self._client:
+            await self._client.aclose()
+
+    async def get_balance(self) -> float | None:
+        """Fetches the current account balance in USD (converted from cents)."""
+        if settings.runtime_dry_run:
+            return 1000.0  # Simulated $1000
+            
+        path = "/trade-api/v2/portfolio/balance"
+        headers = self._get_auth_headers("GET", path)
+        if not headers:
+            return None
+            
+        try:
+            resp = await self._client.get(f"{self._base_url}/portfolio/balance", headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            # Kalshi returns balance in cents
+            return float(data.get("balance", 0)) / 100.0
+        except Exception as e:
+            logger.error(f"Failed to get Kalshi balance: {e}")
+            return None
 
     async def execute_order(self, leg: Leg) -> dict | None:
         """
@@ -66,10 +94,8 @@ class KalshiExecutionClient:
             logger.error("Failed to generate Kalshi auth headers.")
             return None
 
-        client = self._client or httpx.AsyncClient(timeout=10.0)
-        own_client = self._client is None
         try:
-            resp = await client.post(
+            resp = await self._client.post(
                 f"{self._base_url}/portfolio/orders",
                 json=payload,
                 headers=headers
@@ -84,9 +110,6 @@ class KalshiExecutionClient:
         except Exception as e:
             logger.error(f"Kalshi execution error: {e}")
             return None
-        finally:
-            if own_client:
-                await client.aclose()
 
     def _get_auth_headers(self, method: str, path: str, payload: dict | None = None) -> dict | None:
         api_key_id = settings.kalshi_api_key

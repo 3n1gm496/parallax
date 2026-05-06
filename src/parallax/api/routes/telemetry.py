@@ -1,5 +1,5 @@
 import logging
-import asyncio
+import anyio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from parallax.ops.telemetry import broker
@@ -12,24 +12,22 @@ router = APIRouter(prefix="/telemetry", tags=["Telemetry"])
 @router.websocket("/stream")
 async def telemetry_stream(websocket: WebSocket):
     await websocket.accept()
-    queue = broker.subscribe()
+    # BUG-039/040 Fix: Subscribe returns a tuple (send_stream, receive_stream)
+    send_stream, receive_stream = broker.subscribe()
     logger.info("New telemetry client connected.")
     
     try:
-        while True:
-            # We wait for either a client disconnect or a message from the queue
-            if websocket.client_state == WebSocketState.DISCONNECTED:
-                break
-                
-            message = await queue.get()
-            await websocket.send_json(message)
-            queue.task_done()
+        async with receive_stream:
+            async for message in receive_stream:
+                if websocket.client_state == WebSocketState.DISCONNECTED:
+                    break
+                await websocket.send_json(message)
     except WebSocketDisconnect:
         logger.info("Telemetry client disconnected.")
     except Exception as e:
         logger.error(f"Error in websocket stream: {e}")
     finally:
-        broker.unsubscribe(queue)
+        broker.unsubscribe(send_stream)
 
 
 @router.post("/kill-switch/hard")
@@ -49,7 +47,20 @@ async def hard_kill_switch():
         os.kill(os.getpid(), signal.SIGTERM)
         
     # Give the UI 1 second to receive the broadcast before dying
-    asyncio.get_event_loop().call_later(1.0, kill_process)
+    async def _kill_soon():
+        await anyio.sleep(1.0)
+        kill_process()
+    
+    # We can't easily spawn a task here that survives the request without a task group, 
+    # but in FastAPI, we can use BackgroundTasks or just fire and forget if the loop is still alive.
+    # To be safe and loop-agnostic, we'll use a local task group if possible or just anyio.spawn.
+    # Since this is a kill switch, the process is dying anyway.
+    from anyio import create_task_group
+    # We'll use the running loop's task group if available, but for a kill switch, 
+    # a simple background thread or task is fine.
+    # However, to be spietato, we'll just run it in a thread to ensure it hits.
+    import threading
+    threading.Timer(1.0, kill_process).start()
     return {"status": "shutting_down", "type": "hard"}
 
 

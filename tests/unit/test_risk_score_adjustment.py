@@ -1,4 +1,5 @@
 from __future__ import annotations
+import uuid
 
 from parallax.shared.schemas import RiskScore, SimulationResult
 
@@ -114,8 +115,9 @@ def test_assess_with_snapshots_uses_adjusted_risk_in_composite_gate():
     svc._graph_repo = MagicMock()
     svc._simulator = MagicMock()
 
+    candidate_id = str(uuid.uuid4())
     candidate = MagicMock()
-    candidate.id = "cand-1"
+    candidate.id = candidate_id
     candidate.risk_scores = base_risk.model_dump()
     candidate.worst_case_payoff = 0.05
     candidate.market_ids = ["mkt-a", "mkt-b"]
@@ -123,7 +125,7 @@ def test_assess_with_snapshots_uses_adjusted_risk_in_composite_gate():
     svc._repo.get.return_value = candidate
 
     simulation = SimulationResult(
-        candidate_id="cand-1",
+        candidate_id=candidate_id,
         simulated_pnl=0.03,
         friction_bps=50,
         fill_probability=0.9,
@@ -142,7 +144,7 @@ def test_assess_with_snapshots_uses_adjusted_risk_in_composite_gate():
              "source_mismatch": False, "ambiguity_level": "low",
              "ambiguity_terms": [], "shared_ambiguity_terms": [],
          }):
-        assessment, sim_out, adjusted_risk = svc.assess_with_snapshots("cand-1", {})
+        assessment, sim_out, adjusted_risk = svc.assess_with_snapshots(candidate_id, {})
 
     assert adjusted_risk is not None
     assert adjusted_risk.execution_risk == round(min(1.0, 0.05 + 0.30), 4)
@@ -166,8 +168,9 @@ def test_decision_snapshot_persists_adjusted_risk():
         execution=0.35, liquidity=0.08, cancellation=0.05, source_trust=0.08,
         policy_version="risk-v2-snapshot",
     )
+    candidate_id = str(uuid.uuid4())
     simulation = SimulationResult(
-        candidate_id="cand-1",
+        candidate_id=candidate_id,
         simulated_pnl=0.03,
         friction_bps=50,
         fill_probability=0.9,
@@ -201,7 +204,7 @@ def test_decision_snapshot_persists_adjusted_risk():
     svc._repo.upsert_decision_snapshot.side_effect = lambda cid, **kwargs: upserted.update(kwargs)
 
     with patch("parallax.court.service.load_relation_evidence", return_value=None):
-        svc._persist_evaluation("cand-1", assessment, simulation, run_id=None, adjusted_risk=adjusted_risk)
+        svc._persist_evaluation(candidate_id, assessment, simulation, run_id=None, adjusted_risk=adjusted_risk)
 
     svc._repo.update_decision.assert_called_once()
     svc._repo.upsert_decision_snapshot.assert_called_once()

@@ -1,4 +1,5 @@
 import os
+import anyio
 import asyncio
 import pytest
 import aiofiles
@@ -54,8 +55,11 @@ async def test_recorder_and_replay_streamer(tmp_path):
     await recorder.stop()
     
     # Verify file content
-    async with aiofiles.open(file_path, "r") as f:
-        lines = await f.readlines()
+    path = anyio.Path(file_path)
+    async with await path.open("r") as f:
+        lines = []
+        async for line in f:
+            lines.append(line)
         assert len(lines) == 2
         assert "0.5" in lines[0]
         assert "0.51" in lines[1]
@@ -77,7 +81,7 @@ async def test_recorder_and_replay_streamer(tmp_path):
     await streamer.start({})
     
     # Give it a moment to run the playback loop
-    await asyncio.sleep(0.1)
+    await anyio.sleep(0.1)
     
     await streamer.stop()
     

@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 from __future__ import annotations
 
-import asyncio
+import anyio
 import logging
 import re
 import uuid
@@ -123,7 +123,7 @@ class SemanticAgent:
             return []
 
         questions = [m.question + ". " + m.description for m in new_markets]
-        embeddings = await asyncio.to_thread(self.embed, questions)
+        embeddings = await anyio.to_thread.run_sync(self.embed, questions)
         if not embeddings:
             logger.warning("No embeddings produced — skipping semantic match pass.")
             return []

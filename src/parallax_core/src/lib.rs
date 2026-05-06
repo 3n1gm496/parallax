@@ -58,13 +58,16 @@ impl HotPathEngine {
             }
 
             loop {
-                // [Opp 16] Optimized iteration: Avoid cloning keys into a Vec.
-                // We acquire the scanner lock once per cycle for stability.
+                // Acquire dynamic settings from the environment or a shared atomic if needed.
+                // For now, we pull once per loop for simplicity.
+                let friction = 30.0; // bps
+                let capital = 1000.0; // dollars
+
                 {
                     let scanner_guard = scanner.blocking_lock();
                     for entry in manager.books.iter() {
                         let market_id = entry.key();
-                        scanner_guard.scan_tick(market_id);
+                        scanner_guard.scan_tick(market_id, friction, capital);
                     }
                 }
                 
@@ -79,6 +82,7 @@ impl HotPathEngine {
 #[pymodule]
 fn parallax_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Orderbook>()?;
+    m.add_class::<OrderbookManager>()?;
     m.add_class::<ArbitrageResult>()?;
     m.add_class::<HotPathEngine>()?;
     m.add_function(wrap_pyfunction!(compute_arbitrage_edge, m)?)?;

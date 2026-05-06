@@ -42,26 +42,23 @@ async def run_hedge_recovery():
                 session.commit()
                 continue
 
-            # Increment retry count
-            intent.retry_count += 1
-            session.commit()
-
-            # Execute unwind (this is already idempotent/safe to retry)
-            # We call handle_partial_fill directly, but it creates its OWN record currently.
-            # Actually, handle_partial_fill in hedger.py now creates a NEW intent.
-            # This is slightly redundant but safe. 
-            # Ideally, we should refactor hedger.py to separate "record-keeping" from "execution".
-            
-            # For now, let's just trigger the engine. 
-            # Note: handle_partial_fill is async.
+            # [Audit Fix] Execute unwind and update EXISTING record to avoid loops
             try:
+                # Increment retry count
+                intent.retry_count += 1
+                session.commit()
+
+                # Trigger recovery execution
+                # We use the same engine but we must be careful not to create a new intent loop.
+                # Currently handle_partial_fill always creates an intent.
+                # We will update hedger.py to make record creation conditional.
                 await engine.handle_partial_fill(
                     executed_legs=legs, 
-                    failed_legs=[], # We only care about unwinding the executed ones
-                    candidate_id=str(intent.candidate_id or "recovered")
+                    failed_legs=[], 
+                    candidate_id=str(intent.candidate_id or "recovered"),
+                    persist_intent=False # New parameter
                 )
                 
-                # Mark the ORIGINAL intent as 'superseded' or 'completed'
                 intent.status = "completed"
                 session.commit()
             except Exception as e:
@@ -72,6 +69,5 @@ async def run_hedge_recovery():
     logger.info("Hedge Recovery Task complete.")
 
 if __name__ == "__main__":
-    # Quick manual test
     logging.basicConfig(level=logging.INFO)
     asyncio.run(run_hedge_recovery())

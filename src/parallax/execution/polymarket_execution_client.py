@@ -47,6 +47,29 @@ class PolymarketExecutionClient:
         else:
             logger.warning("No Polymarket private key provided. Cannot execute real orders.")
 
+    async def get_balance(self) -> float | None:
+        """Fetches the USDC balance of the associated funder/wallet."""
+        if settings.runtime_dry_run:
+            return 1000.0
+            
+        if not self.client:
+            return None
+            
+        try:
+            # We fetch the balance of the proxy or funder
+            address = self._funder or self.client.get_address()
+            if not address:
+                return None
+                
+            # py-clob-client has a method to get balance
+            balance_info = self.client.get_balance(address)
+            if balance_info:
+                return float(balance_info.get("balance", 0))
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get Polymarket balance: {e}")
+            return None
+
     async def execute_order(self, leg: Leg) -> dict | None:
         """
         Submits an order to Polymarket.
@@ -74,11 +97,16 @@ class PolymarketExecutionClient:
                 size=round(leg.quantity, 2)
             )
 
-            # Using FOK to ensure we get the arbitrage or nothing
-            resp = self.client.create_and_post_order(
-                order_args=order_args,
-                order_type=OrderType.FOK
-            )
+            # [LOGIC FIX] Wrap synchronous CLOB call in to_thread to avoid blocking
+            import anyio
+            
+            def _post():
+                return self.client.create_and_post_order(
+                    order_args=order_args,
+                    order_type=OrderType.FOK
+                )
+
+            resp = await anyio.to_thread.run_sync(_post)
             
             if resp.get("success"):
                 logger.info(f"Polymarket order successful: {resp}")

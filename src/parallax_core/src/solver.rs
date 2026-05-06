@@ -77,32 +77,39 @@ pub fn compute_arbitrage_edge(
     friction_bps: f64,
     capital_limit: f64,
 ) -> ArbitrageResult {
-    // The guaranteed payoff at settlement is always 1.0 (one of YES or NO resolves to 1.0).
-    // So raw edge = 1.0 - (cost of buying both sides)
+    // [Audit Fix] Unified Arbitrage Model
+    // Case 1: Complementary Arbitrage (YES + NO < 1.0)
+    // Case 2: Discrepancy Arbitrage (YES_A - YES_B > friction)
+    // We compute both and pick the one that represents the logical arbitrage edge.
+    
+    // Default to Complementary Model (Law of One Price violation)
     let total_cost_per_unit = a_ask + b_ask;
-    let raw_edge = 1.0 - total_cost_per_unit;
+    let mut raw_edge = 1.0 - total_cost_per_unit;
+    
+    // If the prices are extremely low, it might be a Discrepancy case (comparing same outcome across venues)
+    // where raw_edge = abs(a_ask - b_ask). We handle this by checking if the combined price is > 1.
+    // However, the most robust way is to know the outcome types. 
+    // In the Hot Path, we assume the solver is fed 'Opposing Sides' for Complementary 
+    // and 'Same Sides' for Discrepancy. 
+    // For now, we generalize: if sum < 1.0, it's Complementary. If abs(diff) > friction, it's Discrepancy.
+    
+    let discrepancy_edge = (a_ask - b_ask).abs();
+    if discrepancy_edge * 10_000.0 > friction_bps && discrepancy_edge > raw_edge {
+        raw_edge = discrepancy_edge;
+    }
 
-    // Convert to basis points (1 bps = 0.01%)
     let raw_edge_bps = raw_edge * 10_000.0;
-
-    // Subtract friction costs
     let net_edge_bps = raw_edge_bps - friction_bps;
     let net_edge = net_edge_bps / 10_000.0;
 
-    // Maximum executable size: limited by the smaller side of available liquidity and capital
     let max_size_by_liquidity = a_ask_size.min(b_ask_size);
-    let max_size_by_capital = if total_cost_per_unit > 0.0 {
-        capital_limit / total_cost_per_unit
-    } else {
-        0.0
-    };
+    let max_size_by_capital = if a_ask > 0.0 { capital_limit / a_ask } else { 0.0 };
     let max_executable_size = max_size_by_liquidity.min(max_size_by_capital);
 
-    // PnL = net edge per unit × size
     let estimated_pnl = net_edge * max_executable_size;
 
     ArbitrageResult {
-        is_executable: net_edge_bps > 0.0 && max_executable_size > 0.0,
+        is_executable: net_edge_bps > 1.0 && max_executable_size > 0.0, // 1bps minimum edge to avoid noise
         raw_edge_bps,
         net_edge_bps,
         estimated_pnl,
@@ -155,13 +162,16 @@ where
 {
     let mut best: Option<ArbitrageResult> = None;
 
+    // BUG-053 Fix: Collect b_asks once to avoid redundant clones in the loop
+    let b_vec: Vec<(f64, f64)> = b_asks.collect();
+
     for (a_price, a_size) in a_asks {
-        for (b_price, b_size) in b_asks.clone() {
+        for (b_price, b_size) in &b_vec {
             let result = compute_arbitrage_edge(
                 a_price,
-                b_price,
+                *b_price,
                 a_size,
-                b_size,
+                *b_size,
                 friction_bps,
                 capital_limit,
             );

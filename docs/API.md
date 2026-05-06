@@ -1,39 +1,32 @@
-# RUNTIME
+# API & Runtime Contract
 
 This file describes the current runtime contract, not the aspirational roadmap.
 
-## Pipeline
+## Cold Path Pipeline (Semantic)
 
 `IngestorService -> CompilerService -> IdentityService/IdentityV3Service -> RelationPipelineService -> DivergenceService -> CourtService -> CertificateService -> TrackerService -> SettlementScannerService -> AutopsyService -> CalibrationService`
 
+## Hot Path Pipeline (Execution)
+
+`MarketFeed -> L1HotCache -> OrderbookManager (Rust) -> BasketOptimizer (MILP) -> ExecutionManager -> UnwindEngine`
+
 ## Authority Order
 
-1. Identity
-2. Relation proof
-3. Solver proof object + scenario matrix
-4. Execution realism
-5. Court decision snapshot
-6. Trade proof certificate
-7. Paper position
-8. Autopsy
-9. Calibration / active policy
+1. Identity Authority
+2. Relation Proof (Logical Thesis)
+3. Trade Proof Certificate (Signed Authorization)
+4. Hot Cache Freshness Check
+5. Volatility-Aware Edge Verification
+6. Atomic Fund Validation
+7. Execution Manager (Concurrent Submission)
+8. Unwind Engine (Emergency Recovery)
+9. Autopsy & Performance Audit
 
-## Runtime Rules
-
-- Identity v3 is now consulted first; legacy `group_id` and v2-style matching remain fallback.
-- Strict semantic opportunities must not pass the solver path unless identity status is `verified` and identity version is `identity-v3*`.
-- Candidate persistence requires `scenario_matrix_json` and `proof_object_json`.
-- Certificate issuance requires:
-  - candidate exists
-  - verified identity in relation evidence
-  - scenario matrix present
-  - proof object present
-  - decision snapshot present
-  - simulation result present
-  - snapshot ids if execution model is `snapshot_based`
-  - proof status not `false_arbitrage`
-- Paper position opening requires an issued certificate.
-- Issued certificates are treated as immutable proof rows for re-issue purposes; status changes happen through invalidate / supersede instead of mutating the proof payload.
+- **Zero-Trust Execution**: No order is submitted without a valid `TradeProofCertificate` and verified `IdentityV3`.
+- **Atomic Fund Checks**: Pre-trade balance verification is mandatory. Orders exceeding available liquidity are rejected pre-submission.
+- **Volatility Premium**: Minimum edge requirements are dynamically increased by up to 50 bps during periods of high market update frequency (tracked via L1 Cache).
+- **Toxic Flow Protection**: Unwind pricing must be derived from real-time L1 Cache best bid/ask, not stale execution prices.
+- **Deterministic Solving**: MILP solver complexity is capped at 5,000 states to prevent sub-optimal latency spikes.
 
 ## Execution Paths
 

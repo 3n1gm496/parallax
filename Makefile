@@ -31,10 +31,10 @@ migrate:
 	$(UV) run alembic upgrade head
 
 test:
-	$(UV) run pytest tests/unit/ -v
+	APP_ENV=test API_AUTH_TOKEN=test_token DATABASE_URL=postgresql://parallax:placeholder@localhost:5433/parallax_test $(UV) run pytest tests/unit/ -v
 
 test-integration:
-	$(UV) run pytest tests/integration/ -v -m integration
+	APP_ENV=test API_AUTH_TOKEN=test_token $(UV) run pytest tests/integration/ -v -m integration
 
 lint:
 	$(UV) run ruff check src/ tests/
@@ -45,6 +45,10 @@ pipeline:
 
 api:
 	$(UV) run uvicorn parallax.api.app:app --reload --port 8000
+
+benchmark:
+	$(UV) run python3 scripts/generate_mock_data.py
+	PYTHONPATH=src $(UV) run python3 scripts/benchmark_replay.py
 
 dev:
 	docker compose up -d && $(UV) run uvicorn parallax.api.app:app --reload --port 8000

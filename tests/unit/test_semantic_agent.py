@@ -6,7 +6,8 @@ using mocked embeddings and a mock graph repository.
 
 Run: uv run pytest tests/unit/test_semantic_agent.py -v
 """
-from unittest.mock import MagicMock, patch
+import pytest
+from unittest.mock import MagicMock, patch, AsyncMock
 
 from parallax.graph.semantic_agent import SemanticAgent, MarketRecord, SemanticMatch
 
@@ -75,12 +76,13 @@ class TestFindMatchesPipeline:
         agent._model = None
         return agent
 
+    @pytest.mark.anyio
     @patch.object(SemanticAgent, "embed")
-    def test_find_matches_cross_venue_only(self, mock_embed):
+    async def test_find_matches_cross_venue_only(self, mock_embed):
         """Same-venue pairs should be skipped."""
         mock_embed.return_value = [[0.1] * 384, [0.1] * 384]  # Dummy embeddings
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         mock_repo.find_similar_markets.return_value = [
             {"market_id": "K-TRUMP-2024", "platform": "kalshi",
              "question": TRUMP_KALSHI.question, "score": 0.95}
@@ -88,19 +90,20 @@ class TestFindMatchesPipeline:
 
         agent = self._build_agent()
         markets = [TRUMP_KALSHI, TRUMP_POLY_WIN]
-        matches = agent.find_matches(markets, graph_repo=mock_repo, min_similarity=0.85)
+        matches = await agent.find_matches(markets, graph_repo=mock_repo, min_similarity=0.85)
 
         # The candidate has same platform as TRUMP_KALSHI (kalshi ↔ kalshi) → should be skipped
         # But TRUMP_POLY_WIN will see the kalshi candidate → cross-venue → valid
         cross_venue = [m for m in matches if m.market_a.platform != m.market_b.platform]
         assert len(cross_venue) >= 0  # At least pipeline ran without error
 
+    @pytest.mark.anyio
     @patch.object(SemanticAgent, "embed")
-    def test_compile_arbitrage_sets_complement_only(self, mock_embed):
+    async def test_compile_arbitrage_sets_complement_only(self, mock_embed):
         """compile_arbitrage_sets should only act on COMPLEMENT_OF matches."""
         mock_embed.return_value = [[0.1] * 384]
 
-        mock_repo = MagicMock()
+        mock_repo = AsyncMock()
         agent = self._build_agent()
 
         matches_complement = [SemanticMatch(
@@ -120,8 +123,8 @@ class TestFindMatchesPipeline:
             confidence=0.94,
         )]
 
-        result_comp = agent.compile_arbitrage_sets(matches_complement, graph_repo=mock_repo)
-        result_equiv = agent.compile_arbitrage_sets(matches_equivalent, graph_repo=mock_repo)
+        result_comp = await agent.compile_arbitrage_sets(matches_complement, graph_repo=mock_repo)
+        result_equiv = await agent.compile_arbitrage_sets(matches_equivalent, graph_repo=mock_repo)
 
         assert len(result_comp) == 1, "Complement should produce ArbitrageSet"
         assert len(result_equiv) == 0, "EQUIVALENT_TO should NOT produce ArbitrageSet"

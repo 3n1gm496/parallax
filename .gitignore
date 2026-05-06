@@ -1,21 +1,38 @@
-.env
-.env.*
+# Infrastructure & UI
+node_modules/
+dist/
+ui/dist/
+ui/node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+coverage/
+.serena/
+
+# Rust
+target/
+src/parallax_core/target/
+
+# Local Data & Temp
+*.jsonl
 secrets/
 *.key
 *.pem
 *.p12
 *.sqlite
 *.db
-node_modules/
-.venv/
-__pycache__/
-dist/
-build/
-coverage/
+scratch/
+
+# Environment
+.env
+.env.*
+
+# OS
 .DS_Store
-.worktrees/
-.serena/
 *.swp
 *.swo
-ui/dist/
-ui/node_modules/
+.worktrees/

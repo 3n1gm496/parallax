@@ -23,15 +23,16 @@ and classify their relationship. You must:
 
 1. Compare yes_conditions, no_conditions, exclusions, and ambiguity_terms for both markets.
 2. Classify the relationship as one of: equivalent, duplicate, subset, superset, mutually_exclusive, same_event_family, same_event_independent, related_but_not_tradeable, unrelated.
-3. Explicitly state the comparison axes you used in `comparison_axes`. At minimum, include any
+3. [CRITICAL] Oracle Authority: Compare the oracles and resolution sources. If one market uses a specific oracle (e.g., 'Associated Press') and the other uses a different one (e.g., 'New York Times'), they are NOT equivalent even if the text is identical. Different oracles can resolve differently. In such cases, prefer 'related_but_not_tradeable'.
+4. Explicitly state the comparison axes you used in `comparison_axes`. At minimum, include any
    combination of yes_conditions, no_conditions, exclusions, ambiguity_terms, deadline, oracle,
    and source when those fields matter to the decision.
-4. For equivalent or subset claims: generate at least one concrete counterexample — a real-world
+5. For equivalent or subset claims: generate at least one concrete counterexample — a real-world
    scenario where the two markets resolve differently. If you cannot construct a valid counterexample
    after careful analysis, set is_confirmed=True and breaking_scenarios=[].
-5. Set is_confirmed=False if you found any breaking scenario.
-6. Set tradeable_relation=True only when the logical relationship is strong enough to support arbitrage-style pricing checks after fees and execution.
-7. Set proof_status to one of verified, rejected, needs_review.
+6. Set is_confirmed=False if you found any breaking scenario.
+7. Set tradeable_relation=True only when the logical relationship is strong enough to support arbitrage-style pricing checks after fees and execution.
+8. Set proof_status to one of verified, rejected, needs_review.
 
 Be conservative: prefer 'unrelated' over 'equivalent' when uncertain."""
 

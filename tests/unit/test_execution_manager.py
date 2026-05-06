@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from unittest.mock import AsyncMock
 
@@ -45,7 +46,11 @@ async def test_execution_manager_routing():
             }
         ]
         
-        report = await manager.execute_basket(basket_legs)
+        from unittest.mock import patch
+        with patch("anyio.to_thread.run_sync") as mock_thread:
+            # We must return a value for intent_id
+            mock_thread.return_value = uuid.uuid4()
+            report = await manager.execute_basket(basket_legs)
         
         assert "KX123" in report
         assert report["KX123"] == {"status": "kalshi_ok"}

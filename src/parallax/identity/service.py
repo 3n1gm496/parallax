@@ -301,6 +301,8 @@ class IdentityService:
                         "provenance": provenance,
                     },
                 )
+                # BUG-031: Checkpoint commit to avoid losing progress on large batches
+                self._session.commit()
         return len(touched_event_ids)
 
     def _record_identity_review(
@@ -457,11 +459,25 @@ class IdentityService:
             abs((market.deadline - linked_market.deadline).total_seconds()) / 3600,
             2,
         )
-        deadline_compatible = deadline_delta_hours <= 24
-        source_compatible = self._normalized_source(market.resolution_source) in {
-            "",
-            self._normalized_source(linked_market.resolution_source),
-        }
+        # [LOGIC FIX L-010] Relative Deadline Compatibility
+        # For markets with < 48h to expiry, the gap must be < 4h.
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        time_to_expiry_market = (market.deadline - now).total_seconds() / 3600
+        
+        if time_to_expiry_market < 48:
+            deadline_compatible = deadline_delta_hours <= 4
+        else:
+            deadline_compatible = deadline_delta_hours <= 24
+        # BUG-027 Fix: Do not allow empty sources to match everything. 
+        # Source must be aligned or both must be empty (which is discouraged).
+        m_source = self._normalized_source(market.resolution_source)
+        l_source = self._normalized_source(linked_market.resolution_source)
+        
+        if m_source == "" or l_source == "":
+            source_compatible = (m_source == l_source)
+        else:
+            source_compatible = (m_source == l_source)
         entity_overlap = len(shared_tokens)
         platform_group_match = bool(
             market.group_id and linked_market.group_id and market.group_id == linked_market.group_id
@@ -518,12 +534,18 @@ class IdentityService:
 
     @staticmethod
     def _title_tokens(title: str) -> set[str]:
+        # BUG-030 Fix: Include critical 2-character entities (US, UK, EU, AI, XI, JD)
         return {
             token
             for token in re.findall(r"[a-z0-9]+", title.lower())
-            if len(token) >= 3
+            if len(token) >= 3 or token in {"us", "uk", "eu", "ai", "no", "id", "xi", "jd"}
         }
 
     @staticmethod
     def _normalized_source(source: str | None) -> str:
-        return source.strip().lower() if isinstance(source, str) and source.strip() else ""
+        if not isinstance(source, str) or not source.strip():
+            return ""
+        # [LOGIC FIX L-006] Remove www. and protocols for better matching
+        s = source.strip().lower()
+        s = re.sub(r"^(https?://)?(www\.)?", "", s)
+        return s

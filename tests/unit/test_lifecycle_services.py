@@ -148,7 +148,8 @@ class TestCourtService:
         )
         session.get.return_value = c
         svc = CourtService(session)
-        svc._market_repo.get = MagicMock(side_effect=[_market("pm:a", "polymarket"), _market("kalshi:b", "kalshi")])
+        markets = [_market("pm:a", "polymarket"), _market("kalshi:b", "kalshi")]
+        svc._market_repo.get_batch = MagicMock(return_value=markets)
         svc._graph_repo.get_relations = MagicMock(return_value=[{
             "from_market_id": "pm:a",
             "to_market_id": "kalshi:b",
@@ -170,7 +171,8 @@ class TestCourtService:
         )
         session.get.return_value = c
         svc = CourtService(session)
-        svc._market_repo.get = MagicMock(side_effect=[_market("pm:a", "same"), _market("pm:b", "same")])
+        markets = [_market("pm:a", "same"), _market("pm:b", "same")]
+        svc._market_repo.get_batch = MagicMock(return_value=markets)
         svc._graph_repo.get_relations = MagicMock(return_value=[{
             "from_market_id": "pm:a",
             "to_market_id": "pm:b",
@@ -197,7 +199,8 @@ class TestCourtService:
         )
         session.get.return_value = c
         svc = CourtService(session)
-        svc._market_repo.get = MagicMock(side_effect=[_market("pm:a", "same"), _market("pm:b", "same")])
+        markets = [_market("pm:a", "same"), _market("pm:b", "same")]
+        svc._market_repo.get_batch = MagicMock(return_value=markets)
         svc._graph_repo.get_relations = MagicMock(return_value=[{
             "from_market_id": "pm:a",
             "to_market_id": "pm:b",
@@ -228,7 +231,8 @@ class TestCourtService:
         )
         session.get.return_value = c
         svc = CourtService(session)
-        svc._market_repo.get = MagicMock(side_effect=[_market("pm:a", "same"), _market("pm:b", "same")])
+        markets = [_market("pm:a", "same"), _market("pm:b", "same")]
+        svc._market_repo.get_batch = MagicMock(return_value=markets)
         svc._graph_repo.get_relations = MagicMock(return_value=[{
             "from_market_id": "pm:a",
             "to_market_id": "pm:b",

@@ -12,7 +12,7 @@ from parallax.identity.normalizer import DeadlineNormalizer, EntityNormalizer, S
 from parallax.shared.schemas import IdentityType
 
 _SCORER_VERSION = "identity-v3"
-_MIN_CLUSTER_CONFIDENCE = 0.55
+_MIN_CLUSTER_CONFIDENCE = 0.85 # [LOGIC FIX L-006] Raise threshold to prevent false equivalence
 
 
 @dataclass
@@ -131,7 +131,24 @@ class ClusterEngine:
         )
         self._session.add(member)
         self._session.flush()
+        
+        # [LOGIC FIX L-031] Update cluster key when adding members
+        self._update_cluster_key(cluster_id)
+        
         return member
+
+    def _update_cluster_key(self, cluster_id: uuid.UUID):
+        cluster = self._session.get(EventIdentityCluster, cluster_id)
+        if not cluster:
+            return
+            
+        members = self._session.query(IdentityClusterMember).filter_by(cluster_id=cluster_id).all()
+        market_ids = [m.raw_market_id for m in members if m.raw_market_id]
+        if not market_ids:
+            return
+            
+        cluster.cluster_key = self.build_cluster_key(market_ids)
+        self._session.flush()
 
     @staticmethod
     def build_cluster_key(market_ids: list[str]) -> str:

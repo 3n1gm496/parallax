@@ -34,18 +34,51 @@ class MarketRepository:
             self._session.add(market)
             return market, True
         else:
+            # [LOGIC FIX L-025] Basic price validation
+            if data.outcome_prices:
+                existing.outcome_prices = data.outcome_prices
+            
             existing.title = data.title
             existing.description = data.description
             existing.resolution_criteria = data.resolution_criteria
             existing.outcomes = data.outcomes
-            existing.outcome_prices = data.outcome_prices
             existing.category = data.category
             existing.group_id = data.group_id
             existing.deadline = data.deadline
             existing.is_closed = data.is_closed
             existing.resolution_source = data.resolution_source
             existing.raw_payload = data.raw_payload
+            # updated_at is auto-updated by SQLAlchemy onupdate=_now
             return existing, False
+
+    def close_missing_markets(self, platform: str, currently_active_ids: list[str]) -> int:
+        """
+        [LOGIC FIX L-004] Mark markets as closed if they are no longer reported by the platform.
+        Returns the number of markets closed.
+        """
+        if not currently_active_ids:
+            return 0
+            
+        from sqlalchemy import and_, not_
+        from parallax.db.models import RawMarket
+        
+        q = (
+            self._session.query(RawMarket)
+            .filter(
+                and_(
+                    RawMarket.platform == platform,
+                    RawMarket.is_closed == False,
+                    not_(RawMarket.market_id.in_(currently_active_ids))
+                )
+            )
+        )
+        
+        closed_count = 0
+        for market in q.all():
+            market.is_closed = True
+            closed_count += 1
+            
+        return closed_count
 
     def get(self, market_id: str) -> RawMarket | None:
         return self._session.get(RawMarket, market_id)

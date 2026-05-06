@@ -1,3 +1,4 @@
+import anyio
 import asyncio
 import pytest
 from contextlib import contextmanager
@@ -136,7 +137,7 @@ class TestIngestorService:
         adapter_a.fetch_markets.return_value = [_sample_market()]
 
         async def _slow_fetch():
-            await asyncio.Event().wait()
+            await anyio.sleep(10)
             return [_sample_market("late")]
 
         adapter_b = AsyncMock()

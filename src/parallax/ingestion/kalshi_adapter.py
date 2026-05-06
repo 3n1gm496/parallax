@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import anyio
 import asyncio
 from datetime import datetime, timezone
 
@@ -91,7 +92,7 @@ class KalshiAdapter(PlatformAdapter):
                 last_exc = exc
                 if attempt >= _RETRYABLE_FETCH_ATTEMPTS:
                     raise
-                await asyncio.sleep(_RETRYABLE_FETCH_DELAY_SECONDS * attempt)
+                await anyio.sleep(_RETRYABLE_FETCH_DELAY_SECONDS * attempt)
         assert last_exc is not None
         raise last_exc
 

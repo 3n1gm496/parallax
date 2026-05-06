@@ -1,9 +1,6 @@
-from __future__ import annotations
-
+import msgspec
 from datetime import datetime, timezone
 from typing import Literal
-
-from pydantic import BaseModel, Field
 
 ExecutionPath = Literal["primary_proof_based", "calibrated_model", "degraded_fallback", "offline_validation"]
 ExecutionMode = Literal[
@@ -18,13 +15,13 @@ ExecutionMode = Literal[
 ]
 
 
-class OrderbookLevel(BaseModel):
+class OrderbookLevel(msgspec.Struct):
     price: float  # 0.0–1.0 (probability / dollar price per contract)
     size: float   # number of contracts
 
 
-class OrderbookSide(BaseModel):
-    levels: list[OrderbookLevel] = Field(default_factory=list)
+class OrderbookSide(msgspec.Struct):
+    levels: list[OrderbookLevel] = msgspec.field(default_factory=list)
 
     @property
     def total_depth(self) -> float:
@@ -58,15 +55,15 @@ class OrderbookSide(BaseModel):
         return [(lv.price, lv.size) for lv in self.levels]
 
 
-class OrderbookSnapshot(BaseModel):
+class OrderbookSnapshot(msgspec.Struct):
     id: str
     platform: Literal["polymarket", "kalshi"]
     market_id: str
-    token_id: str | None = None  # Polymarket CLOB token id; None for Kalshi
     outcome: str                  # "YES" or "NO"
     captured_at: datetime
-    bids: OrderbookSide = Field(default_factory=OrderbookSide)
-    asks: OrderbookSide = Field(default_factory=OrderbookSide)
+    token_id: str | None = None  # Polymarket CLOB token id; None for Kalshi
+    bids: OrderbookSide = msgspec.field(default_factory=OrderbookSide)
+    asks: OrderbookSide = msgspec.field(default_factory=OrderbookSide)
     mid_price: float | None = None
     spread_bps: float | None = None
 
@@ -83,25 +80,25 @@ class OrderbookSnapshot(BaseModel):
 
     def to_rust_orderbook(self):
         """
-        Returns a live parallax_core.Orderbook (Rust) populated with all current
-        price levels from this snapshot. Falls back to None if the Rust
-        module is unavailable (e.g. CI without maturin).
+        [PHASE 3] Optimized bridge to Rust. Uses batch updates to minimize
+        Python-to-Rust call overhead.
         """
         try:
             import parallax_core  # type: ignore[import]
             ob = parallax_core.Orderbook(self.market_id, self.platform)
-            for level in self.bids.levels:
-                ob.update_bid(level.price, level.size)
-            for level in self.asks.levels:
-                ob.update_ask(level.price, level.size)
+            
+            # Direct batch update from level price/size list
+            ob.batch_update_bids([(lv.price, lv.size) for lv in self.bids.levels])
+            ob.batch_update_asks([(lv.price, lv.size) for lv in self.asks.levels])
+            
             ts_ns = int(self.captured_at.timestamp() * 1_000_000_000)
             ob.set_last_update_ns(ts_ns)
             return ob
-        except ImportError:
+        except (ImportError, AttributeError):
             return None
 
 
-class DepthAnalysis(BaseModel):
+class DepthAnalysis(msgspec.Struct):
     market_id: str
     outcome: str
     required_size: float

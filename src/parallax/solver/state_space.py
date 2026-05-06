@@ -66,7 +66,9 @@ class OutcomeStateSpaceBuilder:
             return all(assignments[market_id] == first for market_id in ids)
         if relation == RelationType.MUTUALLY_EXCLUSIVE:
             return yes_count <= 1
-        if relation in {RelationType.EXHAUSTIVE, RelationType.EXHAUSTIVE_PARTITION}:
+        if relation == RelationType.EXHAUSTIVE:
+            return yes_count >= 1
+        if relation == RelationType.EXHAUSTIVE_PARTITION:
             return yes_count == 1
         if relation in {RelationType.SUBSET, RelationType.PREREQUISITE}:
             return not (first == "YES" and second == "NO")

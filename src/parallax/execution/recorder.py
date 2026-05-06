@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime, timezone
-import aiofiles
+import anyio
 
 from parallax.execution.schemas import OrderbookSnapshot
 
@@ -19,16 +19,18 @@ class OrderbookRecorder:
         self._file_handle = None
         
     async def start(self):
-        os.makedirs(self.output_dir, exist_ok=True)
+        await anyio.Path(self.output_dir).mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         self._file_path = os.path.join(self.output_dir, f"replay_{timestamp}.jsonl")
         
         logger.info(f"Starting OrderbookRecorder, writing to {self._file_path}")
-        self._file_handle = await aiofiles.open(self._file_path, mode="a")
+        # anyio file I/O
+        path = anyio.Path(self._file_path)
+        self._file_handle = await path.open(mode="a")
         
     async def stop(self):
         if self._file_handle:
-            await self._file_handle.close()
+            await self._file_handle.aclose()
             logger.info(f"Stopped OrderbookRecorder. Saved to {self._file_path}")
             self._file_handle = None
 

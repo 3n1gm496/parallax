@@ -53,6 +53,9 @@ h1, h2, h3, h4 {
 }
 
 .header {
+  position: sticky;
+  top: 1.5rem;
+  z-index: 100; /* BUG-021: Mandatory z-index for glassmorphism layering */
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -78,11 +81,30 @@ h1, h2, h3, h4 {
 
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 350px;
-  grid-template-rows: 1fr 1fr;
+  grid-template-columns: repeat(2, 1fr) 350px;
+  grid-template-rows: repeat(2, 1fr);
   gap: 1.5rem;
   flex: 1;
   min-height: 0;
+}
+
+/* BUG-022: Responsive layout fix for smaller screens */
+@media (max-width: 1400px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr 350px;
+    grid-template-rows: auto;
+  }
+}
+
+@media (max-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+  .app-container {
+    height: auto;
+    min-height: 100dvh; /* BUG-025: Use dynamic viewport height */
+  }
 }
 
 /* Glassmorphism Panels */
@@ -198,7 +220,28 @@ h1, h2, h3, h4 {
   transform: translateY(1px);
 }
 
-/* Feed List */
+/* BUG-023: Global premium scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(255,255,255,0.02);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.1);
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,0.2);
+}
+
 .feed-list {
   flex: 1;
   overflow-y: auto;
@@ -206,20 +249,6 @@ h1, h2, h3, h4 {
   flex-direction: column;
   gap: 0.5rem;
   padding-right: 0.5rem;
-}
-
-.feed-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.feed-list::-webkit-scrollbar-track {
-  background: rgba(255,255,255,0.02);
-  border-radius: 3px;
-}
-
-.feed-list::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.1);
-  border-radius: 3px;
 }
 
 .feed-item {
@@ -238,6 +267,11 @@ h1, h2, h3, h4 {
 .feed-item.type-position_opened { border-left-color: var(--warning-yellow); }
 .feed-item.type-basket_executed { border-left-color: var(--success-green); }
 .feed-item.type-system_alert { border-left-color: var(--danger-red); }
+/* BUG-024: Accessibility focus states */
+.btn:focus-visible, a:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
 
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(-10px); }

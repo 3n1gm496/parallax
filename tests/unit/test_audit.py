@@ -47,7 +47,6 @@ class TestAuditRepository:
         (
             session.query.return_value
             .filter_by.return_value
-            .filter.return_value
             .order_by.return_value
             .all.return_value
         ) = expected
@@ -63,7 +62,7 @@ class TestAuditRepository:
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
         repo = AuditRepository(session)
         repo.list_recent(limit=50)
-        session.query.return_value.filter.return_value.order_by.return_value.limit.assert_called_once_with(50)
+        session.query.return_value.order_by.return_value.limit.assert_called_once_with(50)
 
 
 class TestAuditService:
@@ -85,7 +84,6 @@ class TestAuditService:
         (
             session.query.return_value
             .filter_by.return_value
-            .filter.return_value
             .order_by.return_value
             .all.return_value
         ) = expected
@@ -99,4 +97,4 @@ class TestAuditService:
         session.query.return_value.filter.return_value.order_by.return_value.limit.return_value.all.return_value = []
         svc = AuditService(session)
         svc.get_recent(limit=10)
-        session.query.return_value.filter.return_value.order_by.return_value.limit.assert_called_once_with(10)
+        session.query.return_value.order_by.return_value.limit.assert_called_once_with(10)

@@ -554,6 +554,12 @@ class RiskScore(BaseModel):
             cancellation,
             source_trust,
         ]
+        # [LOGIC FIX L-008] Use Weighted Max to avoid diluting extreme risks
+        # Composite = 70% Max Risk + 30% Average Risk
+        max_risk = max(components)
+        avg_risk = sum(components) / len(components)
+        composite = round(0.7 * max_risk + 0.3 * avg_risk, 4)
+        
         return cls(
             oracle_risk=oracle,
             deadline_risk=deadline,
@@ -562,7 +568,7 @@ class RiskScore(BaseModel):
             liquidity_risk=liquidity,
             cancellation_risk=cancellation,
             source_trust_risk=source_trust,
-            composite=round(sum(components) / len(components), 4),
+            composite=composite,
             policy_version=policy_version,
         )
 
@@ -708,6 +714,8 @@ class AutopsyLabel(str, Enum):
     AMBIGUITY_MISS = "ambiguity_miss"
     EXECUTION_MISS = "execution_miss"
     STALE_QUOTE_MISS = "stale_quote_miss"
+    INSUFFICIENT_FUNDS = "insufficient_funds" # [L-024] New label
+    INVENTORY_MISS = "inventory_miss"
 
 
 # --- API response schemas ---

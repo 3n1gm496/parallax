@@ -160,6 +160,9 @@ function App() {
     return () => observer.disconnect();
   }, [drawPnlChart]);
 
+  // [Audit Fix] Throttled buffer for high-frequency telemetry
+  const feedBufferRef = useRef<FeedItem[]>([]);
+  
   useEffect(() => {
     let ws: WebSocket;
     const connect = () => {
@@ -169,21 +172,24 @@ function App() {
         const data = JSON.parse(event.data);
         const newItem: FeedItem = {
           id: Math.random().toString(36).substring(7),
-          timestamp: data.timestamp,
+          timestamp: data.timestamp || new Date().toISOString(),
           topic: data.topic,
           payload: data.payload
         };
-        setFeed(prev => [...prev.slice(-100), newItem]);
+        
+        // Use buffer to avoid flooding React state
+        feedBufferRef.current = [...feedBufferRef.current.slice(-100), newItem];
+
         if (data.topic === 'candidate_evaluated') {
           setMetrics(m => ({ ...m, evaluated: m.evaluated + 1 }));
           setCandidates(c => [data.payload, ...c.slice(0, 9)]);
         } else if (data.topic === 'position_opened') {
-          const edgePnl = data.payload.simulated_pnl || 0;
+          const edgePnl = Number(data.payload.simulated_pnl) || 0;
           setMetrics(m => ({ ...m, opened: m.opened + 1, pnl: m.pnl + edgePnl }));
           setPositions(p => [...p, data.payload]);
           setPnlHistory(prev => [
             ...prev.slice(-200),
-            { time: data.timestamp, pnl: prev.length > 0 ? prev[prev.length - 1].pnl + edgePnl : edgePnl }
+            { time: data.timestamp, pnl: (prev.length > 0 ? prev[prev.length - 1].pnl : 0) + edgePnl }
           ]);
         } else if (data.topic === 'basket_executed') {
           setMetrics(m => ({ ...m, executed: m.executed + 1 }));
@@ -193,7 +199,18 @@ function App() {
       ws.onerror = () => setConnected(false);
     };
     connect();
-    return () => { if (ws) ws.close(); };
+
+    // Throttled UI update (500ms)
+    const interval = setInterval(() => {
+      if (feedBufferRef.current.length > 0) {
+        setFeed([...feedBufferRef.current]);
+      }
+    }, 500);
+
+    return () => { 
+      if (ws) ws.close(); 
+      clearInterval(interval);
+    };
   }, []);
 
   return (

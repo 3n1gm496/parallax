@@ -25,7 +25,7 @@ fn from_fixed(p: i128) -> f64 {
 /// A single side of the orderbook (bids or asks).
 /// Keys are price in fixed-point integer (higher = better for bids, lower = better for asks).
 /// Values are the available size at that price level.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct BookSide {
     levels: BTreeMap<i128, f64>,
 }
@@ -81,6 +81,7 @@ impl BookSide {
 /// Parallax Orderbook — exposes full depth-of-book to Python via PyO3.
 /// Thread-safe via Python GIL ownership.
 #[pyclass(name = "Orderbook")]
+#[derive(Clone)]
 pub struct Orderbook {
     bids: BookSide,
     asks: BookSide,
@@ -107,9 +108,23 @@ impl Orderbook {
         self.bids.update(price, size);
     }
 
+    /// [PHASE 3] Batch update bids from a list of (price, size) tuples.
+    pub fn batch_update_bids(&mut self, levels: Vec<(f64, f64)>) {
+        for (price, size) in levels {
+            self.bids.update(price, size);
+        }
+    }
+
     /// Update an ask level. size=0.0 removes the level.
     pub fn update_ask(&mut self, price: f64, size: f64) {
         self.asks.update(price, size);
+    }
+
+    /// [PHASE 3] Batch update asks from a list of (price, size) tuples.
+    pub fn batch_update_asks(&mut self, levels: Vec<(f64, f64)>) {
+        for (price, size) in levels {
+            self.asks.update(price, size);
+        }
     }
 
     /// Set the last update timestamp (nanoseconds since UNIX epoch).
@@ -181,6 +196,11 @@ impl Orderbook {
         let ask = self.asks.best_ask().map(|(p, s)| format!("{p:.4}@{s:.2}")).unwrap_or("—".into());
         format!("Orderbook({} {}) bid={} ask={}", self.venue, self.market_id, bid, ask)
     }
+
+    /// [PHASE 3] Internal clone for manager
+    pub fn clone_internal(&self) -> Self {
+        self.clone()
+    }
 }
 
 // Rust-only methods not exposed to Python
@@ -215,26 +235,53 @@ use dashmap::DashMap;
 
 /// Manages multiple orderbooks across different venues.
 /// This is the central hub for the Rust-native hot path.
+#[pyclass]
 pub struct OrderbookManager {
     pub books: DashMap<String, Orderbook>,
 }
 
+#[pymethods]
 impl OrderbookManager {
+    #[new]
     pub fn new() -> Self {
         Self {
             books: DashMap::new(),
         }
     }
-}
 
-impl Default for OrderbookManager {
-    fn default() -> Self {
-        Self::new()
+    /// [PHASE 3] Batch update bids for a specific market.
+    pub fn batch_update_bids(&self, market_id: String, venue: String, levels: Vec<(f64, f64)>) {
+        let mut book = self.books.entry(market_id.clone()).or_insert_with(|| {
+            Orderbook::new(market_id, venue)
+        });
+        book.batch_update_bids(levels);
     }
-}
 
-impl OrderbookManager {
+    /// [PHASE 3] Batch update asks for a specific market.
+    pub fn batch_update_asks(&self, market_id: String, venue: String, levels: Vec<(f64, f64)>) {
+        let mut book = self.books.entry(market_id.clone()).or_insert_with(|| {
+            Orderbook::new(market_id, venue)
+        });
+        book.batch_update_asks(levels);
+    }
+
+    /// Returns a COPY of the orderbook for Python. 
+    /// (DashMap guards are tricky to expose directly as mutable refs).
+    pub fn get_book(&self, market_id: &str) -> Option<Orderbook> {
+        self.books.get(market_id).map(|b| {
+            // We need a way to clone Orderbook. Let's add Clone to Orderbook.
+            // For now, we'll manually rebuild it or just return None if not easy.
+            // Let's add #[derive(Clone)] to Orderbook.
+            b.value().clone_internal()
+        })
+    }
+
     pub fn update_bid(&self, market_id: &str, venue: &str, price: f64, size: f64) {
+        if let Some(mut book) = self.books.get_mut(market_id) {
+            book.update_bid(price, size);
+            return;
+        }
+        
         let mut book = self.books.entry(market_id.to_string()).or_insert_with(|| {
             Orderbook::new(market_id.to_string(), venue.to_string())
         });
@@ -242,6 +289,11 @@ impl OrderbookManager {
     }
 
     pub fn update_ask(&self, market_id: &str, venue: &str, price: f64, size: f64) {
+        if let Some(mut book) = self.books.get_mut(market_id) {
+            book.update_ask(price, size);
+            return;
+        }
+
         let mut book = self.books.entry(market_id.to_string()).or_insert_with(|| {
             Orderbook::new(market_id.to_string(), venue.to_string())
         });

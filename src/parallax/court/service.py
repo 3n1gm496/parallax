@@ -5,7 +5,8 @@ from parallax.calibration.service import CalibrationService
 from parallax.candidates.evidence import load_relation_evidence
 from parallax.candidates.repository import CandidateRepository
 from parallax.config import settings
-from parallax.db.models import PostgresGraphRepository, TradeProofCertificateRecord
+from parallax.db.models import TradeProofCertificateRecord
+from parallax.graph.postgres_repository import PostgresGraphRepository
 from parallax.ingestion.market_repository import MarketRepository
 from parallax.shared.relation_signals import get_relation_signals
 from parallax.shared.schemas import (

@@ -115,11 +115,28 @@ def _market_inferred_deadline() -> RawMarket:
     return market
 
 
-def test_health_returns_ok():
-    payload = health()
-    assert payload["status"] == "ok"
-    assert "docs_enabled" in payload
-    assert "write_auth_enabled" in payload
+@pytest.mark.parametrize("authenticated", [True, False])
+def test_health_probe(authenticated, monkeypatch):
+    import parallax.api.app as api_app
+    mock_settings = MagicMock()
+    mock_settings.api_auth_token = "test_token"
+    mock_settings.api_docs_enabled = True
+    mock_settings.api_require_auth_for_writes = True
+    monkeypatch.setattr(api_app, "settings", mock_settings)
+    
+    request = MagicMock()
+    if authenticated:
+        request.headers = {"Authorization": "Bearer test_token"}
+    else:
+        request.headers = {}
+        
+    payload = api_app.health(request=request)
+    
+    if authenticated:
+        assert payload["status"] == "ok"
+        assert "docs_enabled" in payload
+    else:
+        assert payload == {"status": "ok"}
 
 
 def test_build_readiness_payload_maps_provider_and_semantic_state():
@@ -434,14 +451,14 @@ def test_get_ops_metrics_maps_counts():
             ]
         ),
         _filtered_scalar_query(4),
-        _filtered_scalar_query(18),
+        _scalar_query(18),
         _filtered_scalar_query(7),
         _scalar_query(5),
         _filtered_scalar_query(1),
         _filtered_scalar_query(6),
         _filtered_scalar_query(3),
         _filtered_scalar_query(2),
-        _filtered_scalar_query(latest_ts),
+        _scalar_query(latest_ts),
         _scalar_query(latest_ts),
         _scalar_query(latest_ts),
         _scalar_query(latest_ts),
